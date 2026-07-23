@@ -343,27 +343,35 @@ def prepare_models(
     configs: dict,
     logger,
 ):
-    """
-    Train models based on the dataset split information and save their metadata.
-
-    Args:
-        log_dir (str): Path to the directory where model logs and metadata will be saved.
-        dataset (torchvision.datasets): Dataset object used for training.
-        data_split_info (list): List of dictionaries containing training and test split indices for each model.
-        all_memberships (np.array): Membership matrix indicating which samples were used in training each model.
-        configs (dict): Configuration dictionary containing training settings.
-        logger (logging.Logger): Logger object for logging the training process.
-
-    Returns:
-        list: List of trained model objects.
-    """
     np.save(f"{log_dir}/memberships.npy", all_memberships)
 
-    model_metadata_dict = {}
-    model_list = []
+    metadata_path = f"{log_dir}/models_metadata.json"
 
-    # for split, split_info in enumerate(data_split_info):
+    # Load existing metadata if a previous partial run left some models trained
+    if os.path.exists(metadata_path):
+        with open(metadata_path, "r") as f:
+            model_metadata_dict = json.load(f)
+    else:
+        model_metadata_dict = {}
+
+    model_list = [None] * len(data_split_info)
+
     for split in range(len(data_split_info)):
+        model_idx = split
+        pkl_path = f"{log_dir}/model_{model_idx}.pkl"
+
+        # Skip training if this model is already done (metadata entry + file both exist)
+        if str(model_idx) in model_metadata_dict and os.path.exists(pkl_path):
+            logger.info(f"Model {model_idx} already trained, loading from disk")
+            model = get_model(
+                configs["train"]["model_name"], configs["data"]["dataset"], configs
+            )
+            with open(pkl_path, "rb") as f:
+                state_dict = pickle.load(f)
+            model.load_state_dict(state_dict)
+            model_list[split] = model
+            continue
+
         split_info = data_split_info[split]
         baseline_time = time.time()
         logger.info(50 * "-")
@@ -388,7 +396,6 @@ def prepare_models(
                     hf_dataset.select(split_info["test"]),
                 )
             else:
-                # Fine-tuning with PEFT
                 model, train_loss, test_loss = train_transformer_with_peft(
                     hf_dataset.select(split_info["train"]),
                     get_peft_model(
@@ -421,10 +428,7 @@ def prepare_models(
             logger.info(f"Test accuracy {test_acc}, Test Loss {test_loss}")
         elif model_name == "speedyresnet" and dataset_name == "cifar10":
             data = load_cifar10_data(
-                dataset,
-                split_info["train"],
-                split_info["test"],
-                device=device,
+                dataset, split_info["train"], split_info["test"], device=device
             )
             eval_batch_size, test_size = batch_size, len(split_info["test"])
             divisors = [
@@ -434,32 +438,21 @@ def prepare_models(
                 for factor in (i, test_size // i)
                 if factor <= eval_batch_size
             ]
-            eval_batch_size = max(divisors)  # to support smaller GPUs
+            eval_batch_size = max(divisors)
             print_training_details(logging_columns_list, column_heads_only=True)
             model, train_acc, train_loss, test_acc, test_loss = fast_train_fun(
-                data,
-                make_net(data, device=device),
-                eval_batchsize=eval_batch_size,
-                device=device,
+                data, make_net(data, device=device), eval_batchsize=eval_batch_size, device=device
             )
         else:
-            raise ValueError(
-                f"The {model_name} is not supported for the {dataset_name}"
-            )
+            raise ValueError(f"The {model_name} is not supported for the {dataset_name}")
 
-        model_list.append(copy.deepcopy(model))
-        logger.info(
-            "Training model %s took %s seconds",
-            split,
-            time.time() - baseline_time,
-        )
+        model_list[split] = copy.deepcopy(model)
+        logger.info("Training model %s took %s seconds", split, time.time() - baseline_time)
 
-        model_idx = split
-
-        with open(f"{log_dir}/model_{model_idx}.pkl", "wb") as f:
+        with open(pkl_path, "wb") as f:
             pickle.dump(model.state_dict(), f)
 
-        model_metadata_dict[model_idx] = {
+        model_metadata_dict[str(model_idx)] = {
             "num_train": len(split_info["train"]),
             "optimizer": configs["train"]["optimizer"],
             "batch_size": batch_size,
@@ -467,7 +460,7 @@ def prepare_models(
             "model_name": model_name,
             "learning_rate": configs["train"]["learning_rate"],
             "weight_decay": configs["train"]["weight_decay"],
-            "model_path": f"{log_dir}/model_{model_idx}.pkl",
+            "model_path": pkl_path,
             "train_acc": train_acc,
             "test_acc": test_acc,
             "train_loss": train_loss,
@@ -475,8 +468,14 @@ def prepare_models(
             "dataset": dataset_name,
         }
 
-    with open(f"{log_dir}/models_metadata.json", "w") as f:
-        json.dump(model_metadata_dict, f, indent=4)
+        # Write metadata immediately after each model, not just at the end
+        with open(metadata_path, "w") as f:
+            json.dump(model_metadata_dict, f, indent=4)
+
+        # Free GPU memory before starting the next model
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
 
     return model_list
 
