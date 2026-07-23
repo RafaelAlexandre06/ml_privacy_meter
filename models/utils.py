@@ -1,6 +1,7 @@
 """This module defines functions for model handling, including model definition, loading, and training."""
 
 import copy
+import gc
 import json
 import logging
 import os
