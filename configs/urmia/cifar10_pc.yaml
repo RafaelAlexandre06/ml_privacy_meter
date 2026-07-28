@@ -1,0 +1,34 @@
+run: # Local run tuned for an RTX 2060 (6 GB VRAM) — fast but still valid
+  random_seed: 12345
+  log_dir: demo_urmia_pc # Distinct log_dir; reuse to resume, change for a fresh experiment
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 2 # Only 2 reference models -> 4 trained models total (original, retrained, ref_0, ref_1)
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 2000 # Signal-inference batch; small enough to stay well within 6 GB
+  population_size: 5000 # Fewer z-samples -> faster signal + attack, still plenty for a valid AUC
+
+train:
+  model_name: wrn28-1 # Smallest WideResNet; fits comfortably on a 2060 at batch 256
+  device: cuda:0
+  batch_size: 256 # Keep 256 so the fixed LR schedule (designed around 256) needs no retuning
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 30 # Reduced from 100: wrn28-1 without augmentation overfits enough by ~30 epochs
+             # to give the original model a clear membership gap, while keeping runtime short.
+
+unlearn:
+  algorithm: gaussian_noise
+  forget_size: 500 # 500 forget + 500 unseen = 1000 audited samples (enough for a stable AUC)
+  params:
+    noise_std: 0.01
+
+data:
+  dataset: cifar10
+  data_dir: data

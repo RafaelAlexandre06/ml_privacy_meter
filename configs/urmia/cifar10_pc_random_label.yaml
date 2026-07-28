@@ -1,0 +1,35 @@
+run: # Local run tuned for an RTX 2060 — targeted "fit garbage on the forget set" unlearner
+  random_seed: 12345
+  log_dir: demo_urmia_pc_random_label # Distinct log_dir from the gaussian-noise run
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 2
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 2000
+  population_size: 5000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 30
+
+unlearn:
+  algorithm: random_label # Fine-tune forget images toward random wrong labels
+  forget_size: 500
+  params:
+    epochs: 5 # A few epochs of relabel fine-tuning; raise to over-unlearn harder
+    learning_rate: 0.01 # Smaller than training LR so the model isn't wrecked
+    # optimizer / weight_decay / momentum default to the train config
+
+data:
+  dataset: cifar10
+  data_dir: data

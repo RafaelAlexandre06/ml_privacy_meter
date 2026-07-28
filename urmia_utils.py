@@ -594,7 +594,10 @@ def log_urmia_summary(
         configs (dict): Full config dictionary.
         logger (logging.Logger): Logger object for the current run.
     """
-    header = f"{'role':<10} {'AUC':>8} {'TPR@1%':>8} {'TPR@.1%':>8} {'TPR@0%':>8} {'test_acc':>9} {'forget_acc':>11}"
+    header = (
+        f"{'role':<10} {'AUC':>8} {'2sided':>8} {'TPR@1%':>8} {'TPR@.1%':>8} "
+        f"{'TPR@0%':>8} {'test_acc':>9} {'forget_acc':>11}"
+    )
     logger.info("U-RMIA summary:")
     logger.info(header)
 
@@ -604,18 +607,25 @@ def log_urmia_summary(
         meta = metadata.get(role, {})
         test_acc = meta.get("test_acc")
         forget_acc = meta.get("forget_acc")
+        # Two-sided AUC: AUC < 0.5 means the attack separates the classes in the
+        # inverted direction (the over-unlearning signature). max(auc, 1-auc)
+        # measures leakage regardless of direction.
+        two_sided = max(res["auc"], 1.0 - res["auc"])
         logger.info(
-            "%-10s %8.4f %8.4f %8.4f %8.4f %9s %11s",
+            "%-10s %8.4f %8.4f %8.4f %8.4f %8.4f %9s %11s%s",
             role,
             res["auc"],
+            two_sided,
             res["one_fpr"],
             res["one_tenth_fpr"],
             res["zero_fpr"],
             f"{test_acc:.4f}" if test_acc is not None else "n/a",
             f"{forget_acc:.4f}" if forget_acc is not None else "n/a",
+            "  <-- AUC<0.5: likely over-unlearning" if res["auc"] < 0.45 else "",
         )
         summary["roles"][role] = {
             "auc": float(res["auc"]),
+            "two_sided_auc": float(two_sided),
             "one_fpr": float(res["one_fpr"]),
             "one_tenth_fpr": float(res["one_tenth_fpr"]),
             "zero_fpr": float(res["zero_fpr"]),
@@ -625,9 +635,12 @@ def log_urmia_summary(
 
     logger.info(
         "Interpretation: 'original' AUC is the attack upper bound; 'retrained' AUC is "
-        "the floor (~0.5); 'unlearned' between them measures residual leakage. Watch "
-        "test_acc: an unlearner that only lowers AUC by destroying accuracy is not "
-        "protecting privacy."
+        "the floor (~0.5); 'unlearned' between them measures residual leakage. Read AUC "
+        "two-sided: AUC well below 0.5 also means leakage (over-unlearning gives forget "
+        "points an abnormally-low-confidence signature). And watch test_acc: an "
+        "unlearner that only moves AUC toward 0.5 by wrecking accuracy is not "
+        "protecting privacy. NOTE: this offline (level-2) attack is one-sided and "
+        "poorly calibrated for over-unlearning; the level-3 attack is the honest test."
     )
 
     with open(f"{report_dir}/urmia_summary.json", "w") as f:

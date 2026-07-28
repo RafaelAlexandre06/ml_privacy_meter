@@ -1,0 +1,36 @@
+run: # Level-3 (strong) U-RMIA smoke tuned for an RTX 2060
+  random_seed: 12345
+  log_dir: demo_urmia_online_pc # Distinct log_dir from other runs
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 4 # Small K for the 2060; U-LiRA Gaussians will be noisy (smoke only)
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia_online
+  batch_size: 2000
+  population_size: 2000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 20 # Fewer epochs for a fast local run
+
+unlearn:
+  algorithm: neggrad_plus # Targeted: keeps accuracy, over-unlearns -> naive vs strong diverge
+  forget_size: 250 # 250 forget + 250 unseen = 500 audited samples
+  params:
+    epochs: 3 # Short unlearning pass; raise to over-unlearn harder
+    learning_rate: 0.01
+    forget_coef: 1.0
+    retain_coef: 1.0
+
+data:
+  dataset: cifar10
+  data_dir: data

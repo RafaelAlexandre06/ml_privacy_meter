@@ -1,0 +1,36 @@
+run: # Full level-3 (strong) U-RMIA run — cluster-scale
+  random_seed: 12345
+  log_dir: demo_urmia_online # Reuse to resume; change for a fresh experiment
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 16 # Train-then-unlearn references; K>=8 for stable U-LiRA Gaussians
+  offline_a: 0.3 # Used by the naive (offline) arm and the population p(z) term
+  device: cuda:0
+  report_log: report_urmia_online
+  batch_size: 20000 # Signal-inference batch (pure forward passes)
+  population_size: 10000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: neggrad_plus # Targeted: preserves accuracy, over-unlearns the forget set
+  forget_size: 500
+  params:
+    epochs: 5
+    learning_rate: 0.01
+    forget_coef: 1.0
+    retain_coef: 1.0
+
+data:
+  dataset: cifar10
+  data_dir: data

@@ -1,0 +1,36 @@
+run: # Level-2 run on RTX 2060 with an accuracy-PRESERVING unlearner (neggrad_plus)
+  random_seed: 12345
+  log_dir: demo_urmia_pc_neggrad_plus # Distinct log_dir from the noise / random_label runs
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 2
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 2000
+  population_size: 5000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 30
+
+unlearn:
+  algorithm: neggrad_plus # Ascent on forget AND descent on retain together -> keeps accuracy
+  forget_size: 500
+  params:
+    epochs: 3 # Passes over the retain set while nudging the forget set away
+    learning_rate: 0.01 # Gentle; the retain descent dominates so the model isn't wrecked
+    forget_coef: 1.0 # Raise to unlearn harder (and risk more accuracy loss)
+    retain_coef: 1.0 # Retain rehearsal weight; keep >= forget_coef to preserve utility
+
+data:
+  dataset: cifar10
+  data_dir: data
