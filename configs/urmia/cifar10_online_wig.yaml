@@ -1,6 +1,11 @@
 run: # Level-3 U-RMIA with the WIG unlearner (Lee et al., PoPETs 2026) — cluster-scale
   random_seed: 12345
-  log_dir: demo_urmia_online_wig # Distinct from the neggrad_plus run (demo_urmia_online)
+  # MUST differ from the first WIG run (demo_urmia_online_wig): level-3 references
+  # are train-then-unlearn, so they are invalid once unlearn.params change, and the
+  # resume path LOADS cached models on a params mismatch (it only warns — see
+  # _warn_stale_unlearn, urmia_online_utils.py:268). Reusing the old log_dir would
+  # silently reproduce the broken run. Old dir kept for the record.
+  log_dir: demo_urmia_online_wig_ft30
   time_log: True
 
 audit:
@@ -32,8 +37,16 @@ unlearn:
   params:
     init_ratio: 0.3 # Fraction of Conv/Linear weights re-initialized per layer (paper: 0.3-0.4 best)
     grad_batch_size: 32 # Forget-gradient batch size for the Gaussian fit (paper Sec. 5.1)
-    epochs: 5 # Retain fine-tuning epochs; gap stabilizes after ~2 (paper Fig. 7)
-    learning_rate: 0.01
+    # Retain fine-tuning budget. The first run used 5 epochs @ lr 0.01 and every
+    # model came out mid-recovery: retain acc 0.5602, unseen 0.5040, fine-tune loss
+    # stalled at 1.20 (target) / 1.36 (refs) vs ~0.02 for the original training.
+    # That is ~480 optimizer steps at 1/10 the LR to repair 30% of the weights,
+    # against the ~9,600 steps that built the model — roughly 5% of the budget.
+    # 30 epochs @ 0.02 is ~2,900 ref steps (~30% of original), ~12 min extra across
+    # all 17 models. The paper's Fig. 7 "gap stable after ~2 epochs" is about the
+    # privacy gap settling, NOT about utility recovering — do not tune off it.
+    epochs: 30
+    learning_rate: 0.02
 
 data:
   dataset: cifar10
