@@ -75,8 +75,11 @@ def get_or_create_online_splits(
 
     Persisted to ``<models_dir>/urmia_online_splits.npz``. F/U/R are drawn first
     (so they match the level-2 seed scheme). Each reference gets a random half of
-    R plus a ~50/50 IN/OUT assignment over the audit pool A = [F; U], with at
-    least one IN and one OUT guaranteed.
+    R. The IN/OUT assignment over the audit pool A = [F; U] is balanced
+    **per sample**: every audit point is IN-then-unlearned for exactly
+    ``K // 2`` references and OUT for the rest (the paper's / LiRA's shadow
+    balance), so every sample has both an IN and an OUT reference group and no
+    scorer row is degenerate.
 
     Returns:
         dict: forget_indices, unseen_indices, retain_indices, population_indices,
@@ -141,18 +144,18 @@ def get_or_create_online_splits(
     audit_size = len(audit_indices)
 
     ref_retain_membership = np.zeros((num_ref_models, dataset_size), dtype=bool)
-    ref_unlearn_membership = np.zeros((num_ref_models, audit_size), dtype=bool)
     half = len(retain_indices) // 2
     for k in range(num_ref_models):
         chosen = rng.permutation(retain_indices)[:half]
         ref_retain_membership[k, chosen] = True
-        assignment = rng.random(audit_size) < 0.5
-        # Guarantee at least one IN and one OUT so both Gaussians/means exist.
-        if not assignment.any():
-            assignment[rng.integers(audit_size)] = True
-        if assignment.all():
-            assignment[rng.integers(audit_size)] = False
-        ref_unlearn_membership[k, :] = assignment
+
+    # Per-sample balanced IN/OUT: each audit sample is IN for exactly K//2
+    # references chosen at random (double argsort ranks the K rows per column).
+    # This keeps every scorer row non-degenerate; the per-(sample, ref) coin-flip
+    # alternative leaves a sample with no IN or no OUT reference w.p. 2*2^-K.
+    in_per_sample = num_ref_models // 2
+    ranks = rng.random((num_ref_models, audit_size)).argsort(axis=0).argsort(axis=0)
+    ref_unlearn_membership = ranks < in_per_sample
 
     population_indices = rng.choice(pop_len, size=population_size, replace=False)
 
@@ -261,6 +264,27 @@ class _MetadataStore:
             json.dump(self.meta, f, indent=4)
 
 
+def _warn_stale_unlearn(stored_meta, role, configs, logger):
+    """Warn when a cached model was unlearned with different settings than the config."""
+    stored = {
+        "algorithm": stored_meta.get("unlearn_algorithm"),
+        "params": stored_meta.get("unlearn_params", {}),
+    }
+    current = {
+        "algorithm": configs["unlearn"]["algorithm"],
+        "params": configs["unlearn"].get("params", {}),
+    }
+    if stored != current:
+        logger.warning(
+            "Cached model %s was unlearned with %s but config has %s. Reusing the "
+            "cached model; delete its .pkl (and the cached signals) or change "
+            "run.log_dir to regenerate.",
+            role,
+            stored,
+            current,
+        )
+
+
 def _unlearn(model, forget_idx, retain_idx, dataset, configs, logger):
     """Apply the configured unlearner to ``model`` given forget/retain indices."""
     batch_size = configs["train"]["batch_size"]
@@ -322,6 +346,7 @@ def prepare_online_target_models(models_dir, dataset, splits, configs, logger):
     # unlearned: derived from original.
     role = "unlearned"
     if store.has(role):
+        _warn_stale_unlearn(store.meta[role], role, configs, logger)
         logger.info("Model %s already trained, loading from disk", role)
         models[role] = store.load(role)
     else:
@@ -392,6 +417,7 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
     for k in range(num_ref_models):
         role = f"online_reference_{k}"
         if store.has(role):
+            _warn_stale_unlearn(store.meta[role], role, configs, logger)
             logger.info("Model %s already trained, loading from disk", role)
             refs.append(store.load(role))
             continue
@@ -409,6 +435,7 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
         model = _unlearn(model, in_idx, retain_idx, dataset, configs, logger)
         metadata["num_in_unlearned"] = int(len(in_idx))
         metadata["unlearn_algorithm"] = configs["unlearn"]["algorithm"]
+        metadata["unlearn_params"] = configs["unlearn"].get("params", {})
         store.persist(role, model, metadata)
         refs.append(copy.deepcopy(model))
         del model

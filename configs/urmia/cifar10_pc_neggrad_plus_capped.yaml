@@ -1,0 +1,37 @@
+run: # Level-2 on RTX 2060, neggrad_plus with the ascent loss cap + detuned params
+  random_seed: 12345
+  log_dir: demo_urmia_pc_neggrad_plus_capped # Fresh log_dir (models can be copied over, see docs)
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 2
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 2000
+  population_size: 5000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 30
+
+unlearn:
+  algorithm: neggrad_plus
+  forget_size: 500
+  params:
+    epochs: 2
+    learning_rate: 0.002 # The uncapped run diverged at 0.01; keep the fine-tune gentle
+    forget_coef: 0.5 # Effective ascent weight is ~|R|/|F| times this per epoch, so keep it low
+    retain_coef: 1.0
+    forget_loss_cap: 2.3 # ~ln(10): stop ascending once a forget batch looks never-trained
+
+data:
+  dataset: cifar10
+  data_dir: data

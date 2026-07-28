@@ -37,6 +37,7 @@ still detect. That is the expected, useful behavior to study, not a bug.
 
 import copy
 import logging
+import math
 
 import torch
 from torch import nn
@@ -237,6 +238,14 @@ def neggrad_plus(
     retain loader (cycling the smaller forget loader) preserves retain accuracy
     while still pushing the forget set away, which is what makes it far gentler on
     utility than plain ascent or global weight noise.
+
+    The ascent term is **capped**: when a forget batch's loss is already at or
+    above ``params.forget_loss_cap`` (default ``ln(num_classes)``, the loss of a
+    chance-level prediction — what a never-trained point looks like), that step
+    skips the ascent and only descends on the retain batch. Unbounded cross-
+    entropy ascent otherwise diverges: the small forget set is revisited on every
+    retain step, so its effective weight is ~|R|/|F| times ``forget_coef`` and the
+    ascent damage compounds faster than rehearsal can repair it.
     """
     params = unlearn_configs.get("params", {}) or {}
     epochs = int(params.get("epochs", 5))
@@ -249,9 +258,18 @@ def neggrad_plus(
     optimizer = get_optimizer(unlearned, _optimizer_config(unlearn_configs, train_configs))
     criterion = nn.CrossEntropyLoss()
 
+    # Cap defaults to the chance-level loss, inferred from the model output size.
+    loss_cap = params.get("forget_loss_cap")
+    if loss_cap is None:
+        with torch.no_grad():
+            sample_x = next(iter(forget_loader))[0][:1].to(device)
+            loss_cap = math.log(unlearned(sample_x).shape[1])
+    loss_cap = float(loss_cap)
+
     for epoch in range(epochs):
         forget_iter = _cycle(forget_loader)
         total_r, total_f = 0.0, 0.0
+        capped_steps = 0
         for x_r, y_r in retain_loader:
             x_f, y_f = next(forget_iter)
             x_r, y_r = x_r.to(device), y_r.to(device).long()
@@ -259,18 +277,27 @@ def neggrad_plus(
             optimizer.zero_grad(set_to_none=True)
             loss_r = criterion(unlearned(x_r), y_r)
             loss_f = criterion(unlearned(x_f), y_f)
-            loss = retain_coef * loss_r - forget_coef * loss_f
+            if loss_f.item() >= loss_cap:
+                # Forget batch already looks never-trained; descend on retain only.
+                loss = retain_coef * loss_r
+                capped_steps += 1
+            else:
+                loss = retain_coef * loss_r - forget_coef * loss_f
             loss.backward()
             optimizer.step()
             total_r += loss_r.item()
             total_f += loss_f.item()
         n = max(len(retain_loader), 1)
         logger.info(
-            "neggrad_plus epoch %d/%d: mean retain loss %.4f, mean forget loss %.4f",
+            "neggrad_plus epoch %d/%d: mean retain loss %.4f, mean forget loss %.4f, "
+            "ascent capped on %d/%d steps (cap %.3f)",
             epoch + 1,
             epochs,
             total_r / n,
             total_f / n,
+            capped_steps,
+            n,
+            loss_cap,
         )
 
     return unlearned.to("cpu")
