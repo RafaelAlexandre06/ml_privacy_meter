@@ -1,0 +1,33 @@
+run: # Configurations for a specific run
+  random_seed: 12345 # Integer number specifying random seed
+  log_dir: demo_urmia_cifar10 # Where to save models, signals and reports. Reuse to resume; change for a fresh experiment.
+  time_log: True # Indicate whether to log the time for each step
+
+audit: # Configurations for auditing
+  privacy_game: privacy_loss_model # Required by util.check_configs
+  algorithm: RMIA # U-RMIA only supports RMIA
+  num_ref_models: 4 # K reference models, each trained on a random half of the retain set R
+  offline_a: 0.3 # Fixed offline coefficient (tune_offline_a is not used: it assumes the paired-model scheme)
+  device: cuda:0 # Device for inferring signals and auditing
+  report_log: report_urmia # Report folder name
+  batch_size: 20000 # Batch size for inferring signals (pure forward passes; fits the whole population in one batch on 96GB)
+  population_size: 10000 # Number of population (test-set) samples used as RMIA z-samples
+
+train: # Configuration for training the models
+  model_name: wrn28-1 # Model type (CNN, wrn28-1, wrn28-2, wrn28-10, mlp, ...). speedyresnet/gpt2 unsupported by U-RMIA v1.
+  device: cuda:0
+  batch_size: 1024 # Larger batch for the H100; see note below about learning rate
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn: # Configuration for the unlearning step
+  algorithm: gaussian_noise # Registry key in unlearners.py
+  forget_size: 500 # |F| = |U| = 500; the rest of the train pool is the retain set R
+  params:
+    noise_std: 0.01 # Standard deviation of the Gaussian noise added to each weight
+
+data: # Configuration for data
+  dataset: cifar10 # cifar10, cifar100, purchase100, texas100
+  data_dir: data

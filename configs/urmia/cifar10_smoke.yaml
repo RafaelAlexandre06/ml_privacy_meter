@@ -1,0 +1,33 @@
+run: # Fast smoke-test configuration for U-RMIA
+  random_seed: 12345
+  log_dir: demo_urmia_smoke # Distinct log_dir so it never collides with the full run
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 2 # Small K for speed
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 5000
+  population_size: 1000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 2 # Few epochs: directional sanity check only
+
+unlearn:
+  algorithm: gaussian_noise
+  forget_size: 100
+  params:
+    noise_std: 0.01
+
+data:
+  dataset: cifar10
+  data_dir: data
