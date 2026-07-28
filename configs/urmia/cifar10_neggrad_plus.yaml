@@ -1,0 +1,46 @@
+run: # Level-2 (naive offline U-RMIA) with tuned neggrad_plus — cluster-scale.
+  # First leg of the three-run sequence (see run_urmia_sequence.sh): this is the
+  # naive audit whose verdict lv3 (cifar10_online.yaml, same unlearner, same
+  # unlearn params, same training recipe) then re-checks with the strong attack.
+  random_seed: 12345 # Same seed => same F/U/R split across all three runs
+  log_dir: demo_urmia_neggrad_plus
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 16 # Matched to the lv3 runs so "fewer refs" can't explain lv2-vs-lv3 gaps
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 20000 # Signal-inference batch (pure forward passes)
+  population_size: 10000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256 # Deliberately NOT the H100's 1024 (cifar10.yaml): must match the
+  # lv3 configs and the PC 100ep results, or the runs stop being comparable.
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: neggrad_plus
+  forget_size: 500
+  params: # Best-known tuning from the PC 100-epoch sweep
+    epochs: 2
+    learning_rate: 0.002
+    forget_coef: 0.5
+    retain_coef: 1.0
+    # Target = the loss the RETRAINED model assigns to forget points ("looks
+    # never-seen"). Measured 1.1577 at 100 epochs (demo_urmia_pc_100ep metadata);
+    # 1.0 under-unlearned (ascent capped out immediately), ln(10)=2.3 over-unlearned
+    # (ascent ran into "actively wrong"). Re-check retrained.forget_loss in this
+    # run's models/urmia_models_metadata.json and re-tune if it lands far from 1.16.
+    forget_loss_cap: 1.16
+
+data:
+  dataset: cifar10
+  data_dir: data

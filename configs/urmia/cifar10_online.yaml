@@ -26,13 +26,17 @@ train:
   epochs: 100
 
 unlearn:
-  algorithm: neggrad_plus # Targeted: preserves accuracy, over-unlearns the forget set
+  algorithm: neggrad_plus
   forget_size: 500
-  params:
-    epochs: 5
-    learning_rate: 0.01
-    forget_coef: 1.0
+  params: # Best-known tuning from the PC 100-epoch sweep; kept identical to the
+    # lv2 config (cifar10_neggrad_plus.yaml) so lv2-vs-lv3 isolates the ATTACK.
+    # The previous block here (epochs 5, lr 0.01, no cap) reproduced the recipe
+    # that diverged on the PC before the ascent cap existed.
+    epochs: 2
+    learning_rate: 0.002
+    forget_coef: 0.5
     retain_coef: 1.0
+    forget_loss_cap: 1.16 # ~ retrained forget_loss at 100ep (measured 1.1577)
 
 data:
   dataset: cifar10
