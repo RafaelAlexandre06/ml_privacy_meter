@@ -1,0 +1,40 @@
+run: # Level-3 U-RMIA with the WIG unlearner (Lee et al., PoPETs 2026) — cluster-scale
+  random_seed: 12345
+  log_dir: demo_urmia_online_wig # Distinct from the neggrad_plus run (demo_urmia_online)
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 16 # Train-then-unlearn references; K>=8 for stable U-LiRA Gaussians
+  offline_a: 0.3 # Used by the naive (offline) arm and the population p(z) term
+  device: cuda:0
+  report_log: report_urmia_online
+  batch_size: 20000 # Signal-inference batch (pure forward passes; fits easily in 100GB)
+  population_size: 10000
+  # Adds the modified-entropy statistic (conf_global / mentr_global / ulira_mentr
+  # columns). Essential here: WIG's claim is uniformly small gaps across BOTH
+  # statistics, vs biased unlearners that defend one and leak through the other.
+  entropy_signal: True
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256 # Kept identical to cifar10_online.yaml so runs stay comparable
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: wig # Structural: OVL-selected weight re-init + retain fine-tuning
+  forget_size: 500
+  params:
+    init_ratio: 0.3 # Fraction of Conv/Linear weights re-initialized per layer (paper: 0.3-0.4 best)
+    grad_batch_size: 32 # Forget-gradient batch size for the Gaussian fit (paper Sec. 5.1)
+    epochs: 5 # Retain fine-tuning epochs; gap stabilizes after ~2 (paper Fig. 7)
+    learning_rate: 0.01
+
+data:
+  dataset: cifar10
+  data_dir: data

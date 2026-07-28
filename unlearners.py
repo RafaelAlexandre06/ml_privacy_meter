@@ -27,6 +27,9 @@ Currently implemented:
   ("fit garbage" on the forget set). Amnesiac-style relabeling.
 - ``neggrad_plus``: gradient descent on the retain set *and* ascent on the forget
   set together, so accuracy on the retain set is preserved (Kurmanji et al.).
+- ``wig``: gradient-similarity weight re-initialization + retain fine-tuning
+  (Lee et al., PoPETs 2026). Lives in ``wig_unlearner.py``; structural rather
+  than output-targeting, so it should not over-unlearn any single statistic.
 
 The targeted methods (``neggrad``, ``random_label``, ``neggrad_plus``) are far
 gentler on overall accuracy than ``gaussian_noise`` because only the relevant data
@@ -303,11 +306,16 @@ def neggrad_plus(
     return unlearned.to("cpu")
 
 
+# Imported here (not at the top) so wig_unlearner can lazily import
+# _optimizer_config from this module without a circular-import failure.
+from wig_unlearner import wig  # noqa: E402
+
 UNLEARNERS = {
     "gaussian_noise": gaussian_noise,
     "neggrad": neggrad,
     "random_label": random_label,
     "neggrad_plus": neggrad_plus,
+    "wig": wig,
 }
 
 
