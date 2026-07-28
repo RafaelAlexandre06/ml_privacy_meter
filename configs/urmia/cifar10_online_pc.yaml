@@ -12,6 +12,10 @@ audit:
   report_log: report_urmia_online
   batch_size: 2000
   population_size: 2000
+  # Adds the modified-entropy statistic (conf_global / mentr_global / ulira_mentr
+  # columns). One extra inference pass over the audit subset, no extra training.
+  # Set to False to reproduce the confidence-only summary exactly.
+  entropy_signal: True
 
 train:
   model_name: wrn28-1

@@ -1,0 +1,48 @@
+run: # Level-2 on RTX 2060: same as cifar10_pc_neggrad_plus_capped but trained to convergence.
+  # Purpose: 30 epochs left the models undertrained (train 0.81 / test 0.69, gap 0.12), which
+  # squeezed the whole experiment into an 0.08-wide band between the original (0.574) and
+  # retrained (0.495) AUCs. 100 epochs widens the generalization gap and so the attack's
+  # dynamic range. NOTE: the cosine LR schedule is scaled to `epochs`, so this is a fresh
+  # training run, not a continuation -- it needs its own log_dir and cannot resume the 30-epoch
+  # checkpoints.
+  random_seed: 12345 # Same seed => same F/U/R split as the 30-epoch runs, so results compare
+  log_dir: demo_urmia_pc_100ep
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 2 # Unchanged from the 30-epoch runs to keep the comparison clean
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 2000
+  population_size: 5000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100 # The variable under test. Expect train ~0.95-0.99, test ~0.78-0.82.
+
+unlearn:
+  algorithm: neggrad_plus
+  forget_size: 500
+  params:
+    epochs: 2
+    learning_rate: 0.002
+    forget_coef: 0.5
+    retain_coef: 1.0
+    # Target = "a forget point should look like an unseen point", i.e. the loss the RETRAINED
+    # model assigns to the forget set. At 30 epochs that was 1.018, not the ln(10)=2.3 used in
+    # the previous run -- 2.3 is chance-level for a random model and let ascent overshoot into
+    # "actively wrong" (forget acc 0.39 vs the 0.644 target). After this run, read
+    # retrained.forget_loss from models/urmia_models_metadata.json and re-tune this if needed.
+    forget_loss_cap: 1.0
+
+data:
+  dataset: cifar10
+  data_dir: data

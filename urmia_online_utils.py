@@ -445,7 +445,7 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
     return refs
 
 
-def log_online_summary(report_dir, results, metadata, configs, logger):
+def log_online_summary(report_dir, results, metadata, configs, logger, attacks=None):
     """Log and save the naive-vs-strong comparison across all targets and scorers.
 
     Args:
@@ -454,10 +454,16 @@ def log_online_summary(report_dir, results, metadata, configs, logger):
         metadata (dict): Target-model metadata (accuracies).
         configs (dict): Full config dictionary.
         logger (logging.Logger): Logger object.
+        attacks (Optional[list]): Scorer names to tabulate, in column order.
+            Defaults to ``ATTACKS`` (the three confidence-based scorers); the
+            entry point extends it when ``audit.entropy_signal`` is enabled.
     """
+    if attacks is None:
+        attacks = ATTACKS
+
     logger.info("Level-3 U-RMIA summary (AUC | two-sided AUC per scorer):")
     header = f"{'role':<10}"
-    for attack in ATTACKS:
+    for attack in attacks:
         header += f" {attack + '_auc':>16} {attack + '_2s':>10}"
     header += f" {'test_acc':>9} {'forget_acc':>11}"
     logger.info(header)
@@ -470,7 +476,7 @@ def log_online_summary(report_dir, results, metadata, configs, logger):
         line = f"{role:<10}"
         role_summary = {"test_acc": test_acc, "forget_acc": forget_acc, "attacks": {}}
         flagged = False
-        for attack in ATTACKS:
+        for attack in attacks:
             res = results[role][attack]
             auc = res["auc"]
             two_sided = max(auc, 1.0 - auc)
@@ -498,6 +504,21 @@ def log_online_summary(report_dir, results, metadata, configs, logger):
         "alongside test_acc: targeted unlearners keep accuracy high (unlike global "
         "weight noise)."
     )
+
+    if any(a.endswith("_mentr") or a.endswith("_global") for a in attacks):
+        logger.info(
+            "Entropy comparison: 'ulira' vs 'ulira_mentr' isolates the STATISTIC "
+            "(true-class confidence vs modified entropy) at equal calibration; "
+            "'conf_global'/'mentr_global' vs their ulira counterparts isolates the "
+            "CALIBRATION (one global threshold vs per-sample reference models). "
+            "Expect calibration to dominate. A higher ulira_mentr on 'unlearned' "
+            "means the unlearner suppressed the true-class signal it was optimized "
+            "against while leaving the rest of the output distribution informative. "
+            "Check 'retrained' stays near 0.5 under every scorer before reading a "
+            "max-over-scorers number as real: MIA AUCs are lower bounds, so a "
+            "stronger scorer tightens the bound, but taking a max over many scorers "
+            "also inflates it slightly under the null."
+        )
 
     with open(f"{report_dir}/urmia_online_summary.json", "w") as f:
         json.dump(summary, f, indent=4)

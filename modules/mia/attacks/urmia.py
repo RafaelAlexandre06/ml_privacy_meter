@@ -16,15 +16,27 @@ Three scorers, all pure numpy/scipy on the shared signals:
 - ``run_urmia_online`` — RMIA-family strong arm. Estimates p(x) *empirically* from
   the IN and OUT reference means (instead of the ``offline_a`` guess), keeping
   RMIA's population-ratio structure. Two-sided via the calibration.
-- ``run_ulira`` — LiRA-style strong arm (the paper's actual method). Logit-scales
-  the signals, fits per-sample IN/OUT Gaussians, and scores with the log-
-  likelihood ratio. No population z. Naturally two-sided; needs enough reference
-  models per sample for stable Gaussians (small-K fallback included).
+- ``run_ulira`` — LiRA-style strong arm (the paper's actual method). Scales the
+  signals, fits per-sample IN/OUT Gaussians, and scores with the log-likelihood
+  ratio. No population z. Naturally two-sided; needs enough reference models per
+  sample for stable Gaussians (small-K fallback included).
+- ``run_global_threshold`` — uncalibrated single-threshold baseline, no reference
+  models. Present only as a control (see below).
+
+**On signals other than true-class confidence.** ``run_ulira`` takes a
+``transform`` and is otherwise signal-agnostic: it only needs a scalar per
+(sample, model). That makes it the correct home for alternative statistics such
+as Song & Mittal modified entropy (``urmia_entropy_signals.get_mentr``, scaled
+with ``log_mentr``). The RMIA-family scorers are *not* interchangeable this way:
+their ``ratio > 1`` test is a likelihood ratio ``p(x|theta)/p(x)``, and the
+``offline_a`` correction assumes a value in [0, 1]. Feeding entropies or losses
+into that ratio yields the RMIA procedure without the RMIA estimator, so it is
+deliberately not offered here.
 
 This module does not modify ``modules/mia/attacks/rmia.py``.
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 from scipy.stats import norm
@@ -145,11 +157,48 @@ def _logit(p: np.ndarray) -> np.ndarray:
     return np.log(p / (1.0 - p))
 
 
+def log_mentr(values: np.ndarray) -> np.ndarray:
+    """Log-scale modified-entropy signals for the Gaussian fit.
+
+    Mentr is bounded below by 0 and piles up near 0 for memorized samples, so the
+    raw values are badly skewed. ``log`` plays the same de-saturating role here
+    that ``_logit`` plays for confidences. Pass as ``run_ulira(..., transform=...)``.
+    """
+    return np.log(np.clip(values, _EPS, None))
+
+
+def run_global_threshold(
+    target_signals: np.ndarray,
+    higher_is_member: bool = True,
+) -> np.ndarray:
+    """Uncalibrated global-threshold baseline (no reference models).
+
+    This is the classic attack shape (Yeom / Song & Mittal): rank every sample by
+    a single statistic with one global threshold, ignoring per-sample difficulty.
+    Included so the summary can separate the two effects that are easy to
+    conflate -- the choice of *statistic* (confidence vs modified entropy) and
+    the choice of *calibration* (global threshold vs per-sample reference
+    models). The LiRA paper's central claim is that calibration dominates; this
+    row is what makes that visible in your own numbers rather than taken on faith.
+
+    Args:
+        target_signals (np.ndarray): Statistic on the target model, (num_samples,).
+        higher_is_member (bool): True for confidence (higher = member), False for
+            modified entropy (lower = member).
+
+    Returns:
+        np.ndarray: Score per sample, oriented so higher = more likely member.
+    """
+    scores = np.asarray(target_signals).ravel().astype(float)
+    return scores if higher_is_member else -scores
+
+
 def run_ulira(
     target_signals: np.ndarray,
     ref_signals: np.ndarray,
     ref_in_membership: np.ndarray,
     min_std: float = 1e-3,
+    transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
 ) -> np.ndarray:
     """LiRA-style two-sided scorer (the paper's U-LiRA, adapted).
 
@@ -168,13 +217,23 @@ def run_ulira(
         ref_signals (np.ndarray): Reference confidences, shape (num_samples, K).
         ref_in_membership (np.ndarray): Bool IN mask, shape (num_samples, K).
         min_std (float): Lower bound on any fitted standard deviation.
+        transform (Optional[Callable]): Scaling applied to the signals before the
+            Gaussian fit. Defaults to ``_logit`` (for true-class confidences).
+            Pass ``log_mentr`` to score modified-entropy signals instead. LiRA is
+            signal-agnostic -- it only needs a scalar per (sample, model) whose
+            IN/OUT distributions are roughly Gaussian after scaling -- so the
+            statistic is a free choice here, unlike in the RMIA-family scorers
+            above, whose ratio test presumes a probability.
 
     Returns:
         np.ndarray: Log-likelihood-ratio score per sample (higher = more likely
-            IN-unlearned, i.e. member).
+            IN-unlearned, i.e. member). Direction is handled by the likelihood
+            ratio itself, so a signal where "lower = member" needs no sign flip.
     """
-    phi_target = _logit(target_signals.ravel())
-    phi_ref = _logit(ref_signals)
+    if transform is None:
+        transform = _logit
+    phi_target = transform(np.asarray(target_signals).ravel())
+    phi_ref = transform(np.asarray(ref_signals))
 
     in_mask = ref_in_membership
     out_mask = ~ref_in_membership

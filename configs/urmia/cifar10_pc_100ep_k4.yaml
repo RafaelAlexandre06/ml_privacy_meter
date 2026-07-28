@@ -1,0 +1,43 @@
+run: # Level-2, 100 epochs, K=4 references. Identical to cifar10_pc_neggrad_plus_100ep.yaml
+  # except num_ref_models, so this isolates the effect of the reference count alone.
+  # Same seed => F/U/R split AND reference_0/reference_1 halves are identical to the K=2 run
+  # (the F/U/R permutation is drawn before any reference RNG use, verified), so the models from
+  # demo_urmia_pc_100ep can be copied over and only reference_2 / reference_3 need training.
+  random_seed: 12345
+  log_dir: demo_urmia_pc_100ep_k4
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 4 # The variable under test (was 2). More refs => less noisy OUT-mean per sample.
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 2000
+  population_size: 5000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: neggrad_plus
+  forget_size: 500
+  params:
+    epochs: 2
+    learning_rate: 0.002
+    forget_coef: 0.5
+    retain_coef: 1.0
+    # Deliberately left at 1.0 (the same under-shooting value as the K=2 run) so that the
+    # unlearned model is IDENTICAL and only the attack's reference count changes.
+    forget_loss_cap: 1.0
+
+data:
+  dataset: cifar10
+  data_dir: data

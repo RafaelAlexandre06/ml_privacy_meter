@@ -9,7 +9,18 @@ retrained targets with three scorers on a single shared reference set:
 - ``ulira``       : LiRA-style two-sided likelihood attack (the paper's method).
 
 The summary shows all three side by side so the naive-vs-strong contrast is
-visible in one run. Does not modify any existing file.
+visible in one run.
+
+Setting ``audit.entropy_signal: true`` adds a second statistic -- Song & Mittal
+modified entropy -- and three more columns:
+
+- ``conf_global``  : global threshold on true-class confidence (no references).
+- ``mentr_global`` : global threshold on modified entropy (no references).
+- ``ulira_mentr``  : U-LiRA on modified entropy.
+
+Together with ``ulira`` these form a 2x2 over {statistic} x {calibration}, which
+is what makes "does entropy buy us anything?" answerable rather than a guess.
+Costs one extra inference pass over the audit subset; no extra training.
 
 Usage:
     python run_urmia_online.py --cf configs/urmia/cifar10_online.yaml
@@ -27,7 +38,10 @@ from modules.mia.attacks.urmia import (
     run_rmia_offline_masked,
     run_urmia_online,
     run_ulira,
+    run_global_threshold,
+    log_mentr,
 )
+from urmia_entropy_signals import get_urmia_entropy_signals
 from util import (
     check_configs,
     setup_log,
@@ -37,6 +51,7 @@ from util import (
 )
 from urmia_utils import TARGET_ROLES, REF_COL_START, get_urmia_signals, report_urmia_attack
 from urmia_online_utils import (
+    ATTACKS,
     check_online_configs,
     get_or_create_online_splits,
     prepare_online_target_models,
@@ -123,6 +138,17 @@ def main():
     pop_signals = get_urmia_signals(
         ordered_models, population_subset, configs, logger, is_population=True
     )
+
+    # Optional second statistic: Song & Mittal modified entropy. Needs its own
+    # forward pass (the confidence cache keeps only the true-class column), but
+    # only over the audit subset -- neither scorer that consumes it uses the
+    # population z-samples.
+    use_entropy = bool(configs["audit"].get("entropy_signal", False))
+    mentr_signals = (
+        get_urmia_entropy_signals(ordered_models, audit_subset, configs, logger)
+        if use_entropy
+        else None
+    )
     logger.info("Preparing signals took %0.5f seconds", time.time() - baseline_time)
 
     # Stage 5: attack every target with all three scorers.
@@ -134,6 +160,13 @@ def main():
     z_ref_signals = pop_signals[:, ref_slice]
     # (num_audit_samples, K): True = sample was trained-then-unlearned in that ref.
     ref_in = splits["ref_unlearn_membership"].T
+
+    attacks = list(ATTACKS)
+    if use_entropy:
+        # conf_global is free (no new signals) and is the control that separates
+        # "better statistic" from "better calibration" in the summary.
+        attacks += ["conf_global", "mentr_global", "ulira_mentr"]
+        mentr_ref_signals = mentr_signals[:, ref_slice]
 
     report_dir_exp = f"{directories['report_dir']}/exp"
     results = {}
@@ -149,6 +182,16 @@ def main():
             ),
             "ulira": run_ulira(target, ref_signals, ref_in),
         }
+        if use_entropy:
+            mentr_target = mentr_signals[:, col]
+            scored["conf_global"] = run_global_threshold(target, higher_is_member=True)
+            # Lower modified entropy = more member-like, hence the flip.
+            scored["mentr_global"] = run_global_threshold(
+                mentr_target, higher_is_member=False
+            )
+            scored["ulira_mentr"] = run_ulira(
+                mentr_target, mentr_ref_signals, ref_in, transform=log_mentr
+            )
         results[role] = {
             attack: report_urmia_attack(
                 report_dir_exp, f"{role}_{attack}", mia_scores, memberships, logger
@@ -158,7 +201,7 @@ def main():
     logger.info("Auditing took %0.1f seconds", time.time() - baseline_time)
 
     log_online_summary(
-        directories["report_dir"], results, target_metadata, configs, logger
+        directories["report_dir"], results, target_metadata, configs, logger, attacks
     )
 
     logger.info("Total runtime: %0.5f seconds", time.time() - start_time)
