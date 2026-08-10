@@ -179,10 +179,10 @@ def main():
         target = signals[:, col]
         z_target = pop_signals[:, col]
         scored = {
-            "offline": run_rmia_offline_masked(
+            "urmia_offline": run_rmia_offline_masked(
                 target, ref_signals, ref_in, z_target, z_ref_signals, offline_a
             ),
-            "rmia_online": run_urmia_online(
+            "urmia_online": run_urmia_online(
                 target, ref_signals, ref_in, z_target, z_ref_signals, offline_a
             ),
             "ulira": run_ulira(target, ref_signals, ref_in),

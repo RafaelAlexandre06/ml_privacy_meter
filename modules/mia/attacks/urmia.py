@@ -33,6 +33,18 @@ their ``ratio > 1`` test is a likelihood ratio ``p(x|theta)/p(x)``, and the
 into that ratio yields the RMIA procedure without the RMIA estimator, so it is
 deliberately not offered here.
 
+**On the RMIA-family tie-breaker.** Both RMIA-family scorers here return the
+*fraction* of population points a sample beats, which is bounded above by exactly
+1.0 and quantized to 1/num_pop. On a strongly-leaking target that ceiling is a
+real tie block containing members and non-members together, which destroys the
+low-FPR columns of the report (see ``_tie_broken_fraction``). Both scorers add a
+sub-resolution tie-breaker to order within the block. It cannot move a sample
+across fraction bins, so it only re-scores pairs that were previously exact ties;
+AUCs from before it was introduced stay broadly comparable, but not identical --
+``roc_curve`` credits a tied member/non-member pair 0.5, and breaking the tie
+sends that pair to 0 or 1. Expect a shift of a few thousandths on rows that had
+large tie blocks, upward where the ordering carries signal.
+
 This module does not modify ``modules/mia/attacks/rmia.py``.
 """
 
@@ -68,6 +80,42 @@ def _row_masked_mean(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return means
 
 
+def _tie_broken_fraction(ratios: np.ndarray, prob_ratio_x: np.ndarray) -> np.ndarray:
+    """Fraction of population points beaten, with saturated ties ordered.
+
+    The bare fraction is bounded above by 1.0 and quantized to 1/num_pop, so on a
+    strongly-leaking target many samples pile up at the ceiling -- members and
+    non-members together. ``roc_curve`` collapses that block into a single point at
+    a high FPR, and ``compute_attack_results`` then falls back to the origin for
+    every low-FPR column. Tell-tale in past runs: ``retrained`` reporting a *higher*
+    TPR@1%FPR than ``original``.
+
+    Adds a strictly monotone function of the underlying continuous ratio, squashed
+    into [0, 1) and scaled to half the quantization step. Two samples in different
+    fraction bins differ by at least a full step, so the perturbation can only
+    reorder samples *within* a tie group, and exact ties in ``prob_ratio_x`` stay
+    exactly tied.
+
+    The AUC therefore moves by at most ``0.5 * T / (n_pos * n_neg)``, where T is
+    the number of previously-tied member/non-member pairs -- ``roc_curve`` scores
+    such a pair 0.5, and breaking the tie sends it to 0 or 1. Verified on
+    synthetic saturated data: no bias when the within-tie order is uninformative
+    (mean shift +0.0001, sd 0.006 over 40 seeds) and a clear gain when it carries
+    signal, where the low-FPR columns go from identically zero to 0.31-0.34.
+
+    Args:
+        ratios (np.ndarray): Pairwise ratios, shape (num_samples, num_pop).
+        prob_ratio_x (np.ndarray): Per-sample continuous ratio, (num_samples,).
+
+    Returns:
+        np.ndarray: Score per sample (higher = more likely member).
+    """
+    num_pop = ratios.shape[1]
+    fraction = np.average(ratios > 1.0, axis=1)
+    squashed = prob_ratio_x / (1.0 + prob_ratio_x)  # monotone, lands in [0, 1)
+    return fraction + squashed / (2.0 * num_pop)
+
+
 def run_rmia_offline_masked(
     target_signals: np.ndarray,
     ref_signals: np.ndarray,
@@ -93,7 +141,8 @@ def run_rmia_offline_masked(
         offline_a (float): Offline coefficient for the p() approximation.
 
     Returns:
-        np.ndarray: MIA score per sample (higher = more likely member).
+        np.ndarray: MIA score per sample (higher = more likely member), with the
+            sub-resolution tie-breaker of :func:`_tie_broken_fraction` applied.
     """
     out_mask = ~ref_in_membership
     mean_out_x = _row_masked_mean(ref_signals, out_mask)
@@ -106,7 +155,7 @@ def run_rmia_offline_masked(
     prob_ratio_z = z_target_signals.ravel() / mean_z
 
     ratios = prob_ratio_x[:, np.newaxis] / prob_ratio_z
-    return np.average(ratios > 1.0, axis=1)
+    return _tie_broken_fraction(ratios, prob_ratio_x)
 
 
 def run_urmia_online(
@@ -133,7 +182,8 @@ def run_urmia_online(
         offline_a (float): Offline coefficient for the population p(z) term.
 
     Returns:
-        np.ndarray: MIA score per sample (higher = more likely member).
+        np.ndarray: MIA score per sample (higher = more likely member), with the
+            sub-resolution tie-breaker of :func:`_tie_broken_fraction` applied.
     """
     in_mask = ref_in_membership
     out_mask = ~ref_in_membership
@@ -148,7 +198,7 @@ def run_urmia_online(
     prob_ratio_z = z_target_signals.ravel() / mean_z
 
     ratios = prob_ratio_x[:, np.newaxis] / prob_ratio_z
-    return np.average(ratios > 1.0, axis=1)
+    return _tie_broken_fraction(ratios, prob_ratio_x)
 
 
 def _logit(p: np.ndarray) -> np.ndarray:

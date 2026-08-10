@@ -1,0 +1,38 @@
+run: # OLA smoke test — RTX 2060. Validates every stage end to end; the privacy
+  # numbers from this run mean nothing (8 shadow models, 5 epochs).
+  random_seed: 12345
+  log_dir: demo_ola_pc
+  time_log: True
+  num_experiments: 1
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_shadow_models: 8 # 4 select / 4 evaluate — the minimum check_ola_configs allows
+  num_ref_models: 4
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_ola
+  batch_size: 2000 # 6 GB card
+  population_size: 2000
+
+train:
+  model_name: wrn28-1 # Cheap; the real run uses wrn28-2
+  device: cuda:0
+  batch_size: 128
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 5
+
+ola:
+  outer_size: 500
+  p_gen: 0.5
+  p_mem: 0.2
+  selection_fpr: 0.01
+  mask_seed: 12345
+  test_size: 2000
+
+data:
+  dataset: cifar10
+  data_dir: data

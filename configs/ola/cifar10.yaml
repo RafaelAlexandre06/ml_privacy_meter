@@ -1,0 +1,50 @@
+run: # OLA (Outer Layer Attenuation) audit — cluster scale
+  random_seed: 12345
+  log_dir: demo_ola_cifar10
+  time_log: True
+  num_experiments: 1 # Unused by run_ola.py; kept so shared helpers find the key
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA # Overridden per signal pass by get_ola_signals; see ola_utils
+  # Split in half: 0-31 pick the outer layer, 32-63 score it. Disjoint, so the
+  # outer layer is not chosen by the same models that later evaluate it. The
+  # paper uses 256; the pool is resumable, so raising this reuses what exists.
+  num_shadow_models: 64
+  num_ref_models: 32 # = the evaluation half, for shared helpers that read it
+  offline_a: 0.3 # Used by rmia_offline and by the population term of both
+  device: cuda:0
+  report_log: report_ola
+  batch_size: 20000 # Signal inference — forward passes only
+  population_size: 10000
+  # data_size deliberately UNSET. The low-FPR resolution of this audit comes
+  # from the ~25,000 non-members: at that size the 0.1%-FPR point is 25 false
+  # positives, which is what makes it comparable to the paper's operating point.
+  # Downsampling the audit set throws that away.
+
+train:
+  # wrn28-2 as in the paper. wrn28-1 gives only 464 maskable channels (16 in the
+  # first group), so a p_gen split leaves too little shared capacity for the
+  # attenuation to mean anything.
+  model_name: wrn28-2
+  device: cuda:0
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+ola:
+  outer_size: 1000 # n = 1000 most attackable members, as in the paper
+  # Paper's sweet spot is p_mem in [0.1, 0.3], p_gen in [0.4, 0.6]: utility stays
+  # within 5% of baseline while inner-layer TPR drops below it. A sweep is a
+  # follow-up, not part of the first run.
+  p_gen: 0.5 # Fraction of each layer's channels shared by every example
+  p_mem: 0.2 # Per-channel probability an outer-layer example gets a memory channel
+  selection_fpr: 0.01 # FPR the per-model ASR threshold is calibrated to
+  mask_seed: 12345 # Masks are rebuilt from this; changing it invalidates the ola checkpoint
+  test_size: 5000 # Non-members used for the utility read-out
+
+data:
+  dataset: cifar10
+  data_dir: data

@@ -21,6 +21,7 @@ import copy
 import gc
 import json
 import logging
+import math
 import os
 import pickle
 from pathlib import Path
@@ -38,8 +39,11 @@ from urmia_utils import TARGET_ROLES, check_urmia_configs
 ONLINE_SPLITS_FILE = "urmia_online_splits.npz"
 ONLINE_METADATA_FILE = "urmia_online_models_metadata.json"
 
-# Attack labels used for report artifacts and the summary.
-ATTACKS = ["offline", "rmia_online", "ulira"]
+# Attack labels used for report artifacts and the summary. Both RMIA-family
+# scorers are unlearning-specific adaptations rather than stock RMIA, hence the
+# urmia_ prefix. Runs made before 2026-08-10 use the old labels "offline" and
+# "rmia_online" in their summary JSON and attack_result_*.npz filenames.
+ATTACKS = ["urmia_offline", "urmia_online", "ulira"]
 
 
 def check_online_configs(configs: dict, dataset_size: int) -> None:
@@ -445,6 +449,93 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
     return refs
 
 
+def check_positive_control(original_summary, attacks, forget_size, logger):
+    """Flag scorers that fail to detect membership on the un-unlearned model.
+
+    The ``original`` model is trained on R + F and never touched by the unlearner,
+    so it leaks by construction (train accuracy is ~1.0 in every run so far). A
+    scorer that reads chance on *that* row is broken for this run, and its
+    ``unlearned`` number is a false negative rather than a privacy win.
+
+    This is not hypothetical. In the first WIG run the unlearner wrecked every
+    reference model, which widened U-LiRA's per-sample IN/OUT Gaussians until the
+    likelihood ratio carried nothing: ``ulira`` scored 0.4832 on ``original``
+    (vs 0.6889 with healthy references) and the whole table then looked like
+    perfect privacy. The ``test_acc`` sanity check cannot catch this, because the
+    damage shows up in the row where the unlearner was never applied.
+
+    The threshold is the Mann-Whitney null standard error of an AUC over
+    ``forget_size`` members vs the same number of non-members -- the correct null
+    for testing a scorer against chance (0.0183 at 500 vs 500). A scorer is called
+    dead below 2 SE and alive above 4 SE; requiring at least one live scorer is
+    what separates "this scorer is broken" from "this run has no leakage to find".
+
+    Args:
+        original_summary (dict): The ``original`` entry of the summary's ``roles``.
+        attacks (list): Scorer names, in column order.
+        forget_size (int): |F|, which also equals |U|.
+        logger (logging.Logger): Logger object.
+
+    Returns:
+        dict: Verdict, stored under ``positive_control`` in the summary JSON.
+    """
+    n = int(forget_size)
+    null_se = math.sqrt((2 * n + 1) / (12.0 * n * n))
+    dead_cut = 0.5 + 2.0 * null_se
+    alive_cut = 0.5 + 4.0 * null_se
+
+    scores = {a: original_summary["attacks"][a]["two_sided_auc"] for a in attacks}
+    dead = [a for a in attacks if scores[a] < dead_cut]
+    alive = [a for a in attacks if scores[a] >= alive_cut]
+
+    if not dead:
+        status = "passed"
+    elif alive:
+        status = "failed"
+    else:
+        status = "inconclusive"
+
+    if status == "failed":
+        logger.warning(
+            "POSITIVE CONTROL FAILED for %s. These scorers read chance (two-sided "
+            "AUC < %.4f) on the 'original' model, which never touched the unlearner "
+            "and must leak -- while %s reached %.4f. They are dead for this run: "
+            "DISCARD their 'unlearned' numbers, do not read them as a privacy win. "
+            "Most likely cause is damaged reference models (a collapsed unlearner "
+            "poisons the reference set, which only the reference-dependent scorers "
+            "feel). Check the reference test accuracies.",
+            ", ".join(f"{a}={scores[a]:.4f}" for a in dead),
+            dead_cut,
+            max(alive, key=lambda a: scores[a]),
+            max(scores[a] for a in alive),
+        )
+    elif status == "inconclusive":
+        logger.warning(
+            "POSITIVE CONTROL INCONCLUSIVE: no scorer detects membership on the "
+            "'original' model (best two-sided AUC %.4f, below the %.4f bar). There "
+            "is no leakage signal to lose in this run, so nothing can be concluded "
+            "about the unlearner from the 'unlearned' row.",
+            max(scores.values()),
+            alive_cut,
+        )
+    else:
+        logger.info(
+            "Positive control passed: every scorer detects membership on the "
+            "'original' model (min two-sided AUC %.4f > %.4f).",
+            min(scores.values()),
+            dead_cut,
+        )
+
+    return {
+        "status": status,
+        "null_se": float(null_se),
+        "dead_threshold": float(dead_cut),
+        "elevated_threshold": float(alive_cut),
+        "dead_scorers": dead,
+        "original_two_sided_auc": {a: float(v) for a, v in scores.items()},
+    }
+
+
 def log_online_summary(report_dir, results, metadata, configs, logger, attacks=None):
     """Log and save the naive-vs-strong comparison across all targets and scorers.
 
@@ -480,7 +571,7 @@ def log_online_summary(report_dir, results, metadata, configs, logger, attacks=N
             res = results[role][attack]
             auc = res["auc"]
             two_sided = max(auc, 1.0 - auc)
-            if attack == "offline" and auc < 0.45:
+            if attack == "urmia_offline" and auc < 0.45:
                 flagged = True
             line += f" {auc:>16.4f} {two_sided:>10.4f}"
             role_summary["attacks"][attack] = {
@@ -493,13 +584,22 @@ def log_online_summary(report_dir, results, metadata, configs, logger, attacks=N
         line += f" {test_acc:>9.4f}" if test_acc is not None else f" {'n/a':>9}"
         line += f" {forget_acc:>11.4f}" if forget_acc is not None else f" {'n/a':>11}"
         if flagged:
-            line += "  <-- offline AUC<0.45: over-unlearning"
+            line += "  <-- urmia_offline AUC<0.45: over-unlearning"
         logger.info(line)
         summary["roles"][role] = role_summary
 
+    # Runs before any other reading: a scorer that is blind on 'original' cannot
+    # be trusted on 'unlearned'.
+    summary["positive_control"] = check_positive_control(
+        summary["roles"]["original"],
+        attacks,
+        configs["unlearn"]["forget_size"],
+        logger,
+    )
+
     logger.info(
-        "Interpretation: on 'unlearned', if the offline (naive) AUC sags toward/below "
-        "0.5 while rmia_online and ulira two-sided AUC stay elevated, the naive attack "
+        "Interpretation: on 'unlearned', if the urmia_offline (naive) AUC sags toward/"
+        "below 0.5 while urmia_online and ulira two-sided AUC stay elevated, the naive attack "
         "is giving a false sense of privacy that the strong attacks see through. Read "
         "alongside test_acc: targeted unlearners keep accuracy high (unlike global "
         "weight noise)."
