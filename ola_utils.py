@@ -58,6 +58,15 @@ TARGET_ROLES = ["vanilla", "ola", "onion"]
 # targets; "inner" is where the Privacy Onion effect shows up.
 AUDIT_SUBSETS = ["outer", "inner", "all_members"]
 
+# Absolute floor the undefended 'vanilla' model must clear for the run to say
+# anything about the defense. Not a significance test -- with ~25,000
+# non-members the 2-null-SE bar lands at ~0.505, which a model with essentially
+# no train/test gap still clears. wrn28-2 for 100 epochs on 25,000 CIFAR-10
+# images without augmentation should reach ~0.6+; anything under this means the
+# target is undertrained (or the membership labels are misaligned) and every
+# 'ola' vs 'vanilla' difference below is a rounding difference.
+MIN_CEILING_AUC = 0.55
+
 
 def check_ola_configs(configs: dict, dataset_size: int) -> None:
     """Validate the OLA config block.
@@ -579,16 +588,26 @@ def log_ola_summary(
     # Positive control, carried over from the U-RMIA audit (findings 6.3): a
     # scorer that cannot detect membership on the undefended model is broken for
     # this run, and its 'ola' number is a false negative, not a privacy win.
+    # Two separate bars, because at this sample size they say different things.
+    # The statistical bar (2 null SE) only asks "is this distinguishable from
+    # chance". With ~25,000 non-members the null SE is ~0.0026, so that bar sits
+    # at ~0.505 and a model leaking nothing of practical use clears it -- the
+    # U-RMIA audit's |U|=500 put the same bar at 0.537, which is why it worked
+    # there and does not here. The useful bar is absolute: the undefended
+    # ceiling has to be high enough that a defense pushing it down is a
+    # measurable effect rather than a rounding difference.
     null_se = math.sqrt((2 * n_nonmembers + 1) / (12.0 * n_nonmembers * n_nonmembers))
-    dead_cut = 0.5 + 2.0 * null_se
-    dead = [
-        s
-        for s in scorers
-        if max(
+    chance_cut = 0.5 + 2.0 * null_se
+    vanilla_auc = {
+        s: max(
             results["vanilla"]["all_members"][s]["auc"],
             1.0 - results["vanilla"]["all_members"][s]["auc"],
         )
-        < dead_cut
+        for s in scorers
+    }
+    dead = [s for s in scorers if vanilla_auc[s] < chance_cut]
+    too_weak = [
+        s for s in scorers if chance_cut <= vanilla_auc[s] < MIN_CEILING_AUC
     ]
     if dead:
         logger.warning(
@@ -597,9 +616,31 @@ def log_ola_summary(
             "numbers rather than reading them as a privacy win.",
             ", ".join(dead),
         )
-    else:
-        logger.info("Positive control passed: every scorer detects 'vanilla'.")
-    summary["positive_control"] = {"dead_scorers": dead, "null_se": float(null_se)}
+    if too_weak:
+        logger.warning(
+            "CEILING TOO LOW: %s detect 'vanilla' but only reach AUC < %.2f "
+            "(%s). There is not enough leakage to defend against, so an 'ola' "
+            "number below 'vanilla' is not evidence the defense works. Expect "
+            "an undertrained target or one with no train/test gap -- check the "
+            "accuracies before reading anything else.",
+            ", ".join(too_weak),
+            MIN_CEILING_AUC,
+            ", ".join(f"{s}={vanilla_auc[s]:.4f}" for s in too_weak),
+        )
+    if not dead and not too_weak:
+        logger.info(
+            "Positive control passed: every scorer reaches AUC >= %.2f on "
+            "'vanilla'.",
+            MIN_CEILING_AUC,
+        )
+    summary["positive_control"] = {
+        "dead_scorers": dead,
+        "weak_ceiling_scorers": too_weak,
+        "vanilla_auc": {s: float(vanilla_auc[s]) for s in scorers},
+        "null_se": float(null_se),
+        "chance_cut": float(chance_cut),
+        "min_ceiling_auc": MIN_CEILING_AUC,
+    }
 
     logger.info("")
     logger.info(

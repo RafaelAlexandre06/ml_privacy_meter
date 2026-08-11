@@ -75,6 +75,16 @@ from util import (
 
 torch.backends.cudnn.benchmark = True
 
+# This job builds 64 shadow models plus 3 targets, and default_trainer.train
+# calls inference() once per epoch -- each call spins up a fresh DataLoader
+# iterator with num_workers=4 (dataset/utils.py:363). That is ~50,000 worker
+# spawns over a full run. Under torch's default 'file_descriptor' sharing
+# strategy every shared tensor costs an open fd, and the run dies partway
+# through with "OSError: [Errno 24] Too many open files". 'file_system' passes
+# shared memory by name instead, so the fd count stays flat. Raise the limit
+# too (ulimit -n 65535) -- this alone is not always enough on a busy node.
+torch.multiprocessing.set_sharing_strategy("file_system")
+
 OUTER_LAYER_FILE = "ola_outer_layer.npz"
 
 
