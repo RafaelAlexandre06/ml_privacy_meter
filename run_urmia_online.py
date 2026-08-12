@@ -3,10 +3,10 @@
 Builds train-then-unlearn reference models and attacks the original / unlearned /
 retrained targets with three scorers on a single shared reference set:
 
-- ``offline``     : naive one-sided RMIA (per-sample OUT masking) — the level-2
-                    style attack that can be fooled by over-unlearning.
-- ``rmia_online`` : RMIA-family strong attack with empirical p(x).
-- ``ulira``       : LiRA-style two-sided likelihood attack (the paper's method).
+- ``urmia_offline`` : naive one-sided RMIA (per-sample OUT masking) — the
+                      level-2 style attack that can be fooled by over-unlearning.
+- ``urmia_online``  : RMIA-family strong attack with empirical p(x).
+- ``ulira``         : LiRA-style two-sided likelihood attack (the paper's method).
 
 The summary shows all three side by side so the naive-vs-strong contrast is
 visible in one run.

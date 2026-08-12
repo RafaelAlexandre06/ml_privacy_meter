@@ -49,6 +49,7 @@ from trainers.ola_trainer import IndexedSubset, train_ola
 
 OLA_SPLITS_FILE = "ola_splits.npz"
 OLA_METADATA_FILE = "ola_models_metadata.json"
+OUTER_LAYER_FILE = "ola_outer_layer.npz"
 
 # vanilla = leakage ceiling and per-scorer positive control; onion = the baseline
 # OLA is arguing against (delete the outer layer, retrain).
@@ -683,10 +684,7 @@ def log_ola_summary(
     )
     chance_cut = 0.5 + 2.0 * null_se
     vanilla_auc = {
-        s: max(
-            results["vanilla"]["all_members"][s]["auc"],
-            1.0 - results["vanilla"]["all_members"][s]["auc"],
-        )
+        s: two_sided_auc(results["vanilla"]["all_members"][s]["auc"])
         for s in scorers
     }
     dead = [s for s in scorers if vanilla_auc[s] < chance_cut]

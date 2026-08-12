@@ -40,6 +40,7 @@ from audit import compute_attack_results
 from dataset.utils import get_dataloader, load_dataset_subsets
 from get_signals import get_softmax
 from models.utils import get_model
+from ola_utils import two_sided_auc
 from trainers.default_trainer import train, inference
 from unlearners import get_unlearner
 from visualize import plot_roc, plot_roc_log
@@ -608,9 +609,8 @@ def log_urmia_summary(
         test_acc = meta.get("test_acc")
         forget_acc = meta.get("forget_acc")
         # Two-sided AUC: AUC < 0.5 means the attack separates the classes in the
-        # inverted direction (the over-unlearning signature). max(auc, 1-auc)
-        # measures leakage regardless of direction.
-        two_sided = max(res["auc"], 1.0 - res["auc"])
+        # inverted direction (the over-unlearning signature).
+        two_sided = two_sided_auc(res["auc"])
         logger.info(
             "%-10s %8.4f %8.4f %8.4f %8.4f %8.4f %9s %11s%s",
             role,

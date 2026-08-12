@@ -56,6 +56,7 @@ from modules.mia.attacks.urmia import (
     run_urmia_online as score_rmia_online,
 )
 from ola_utils import (
+    OUTER_LAYER_FILE,
     TARGET_ROLES,
     check_ola_configs,
     compute_asr,
@@ -84,8 +85,6 @@ torch.backends.cudnn.benchmark = True
 # shared memory by name instead, so the fd count stays flat. Raise the limit
 # too (ulimit -n 65535) -- this alone is not always enough on a busy node.
 torch.multiprocessing.set_sharing_strategy("file_system")
-
-OUTER_LAYER_FILE = "ola_outer_layer.npz"
 
 
 def main():

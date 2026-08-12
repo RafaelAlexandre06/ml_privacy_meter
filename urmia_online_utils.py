@@ -32,6 +32,7 @@ from torch.utils.data import Subset
 
 from dataset.utils import get_dataloader
 from models.utils import get_model
+from ola_utils import two_sided_auc
 from trainers.default_trainer import train, inference
 from unlearners import get_unlearner
 from urmia_utils import TARGET_ROLES, check_urmia_configs
@@ -570,7 +571,7 @@ def log_online_summary(report_dir, results, metadata, configs, logger, attacks=N
         for attack in attacks:
             res = results[role][attack]
             auc = res["auc"]
-            two_sided = max(auc, 1.0 - auc)
+            two_sided = two_sided_auc(auc)
             if attack == "urmia_offline" and auc < 0.45:
                 flagged = True
             line += f" {auc:>16.4f} {two_sided:>10.4f}"

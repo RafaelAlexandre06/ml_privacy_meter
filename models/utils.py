@@ -344,6 +344,25 @@ def prepare_models(
     configs: dict,
     logger,
 ):
+    """
+    Train models based on the dataset split information and save their metadata.
+
+    Resumable (fork behavior): a model whose metadata entry and .pkl both exist
+    is loaded instead of retrained, metadata is rewritten after every model, and
+    GPU memory is freed between models, so an interrupted run picks up where it
+    stopped.
+
+    Args:
+        log_dir (str): Path to the directory where model logs and metadata will be saved.
+        dataset (torchvision.datasets): Dataset object used for training.
+        data_split_info (list): List of dictionaries containing training and test split indices for each model.
+        all_memberships (np.array): Membership matrix indicating which samples were used in training each model.
+        configs (dict): Configuration dictionary containing training settings.
+        logger (logging.Logger): Logger object for logging the training process.
+
+    Returns:
+        list: List of trained model objects.
+    """
     np.save(f"{log_dir}/memberships.npy", all_memberships)
 
     metadata_path = f"{log_dir}/models_metadata.json"

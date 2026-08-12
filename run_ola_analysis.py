@@ -45,13 +45,12 @@ from audit import compute_attack_results
 from ola_utils import (
     AUDIT_SUBSETS,
     OLA_SPLITS_FILE,
+    OUTER_LAYER_FILE,
     TARGET_ROLES,
     mann_whitney_null_se,
     two_sided_auc,
 )
 from util import setup_log
-
-OUTER_LAYER_FILE = "ola_outer_layer.npz"
 
 # False-positive *counts*, not rates. With ~25,000 non-members these are the 0%,
 # 0.1% and 1% operating points, but a count stays meaningful if the audit set
@@ -64,9 +63,11 @@ def load_dataset_ordered_scores(report_exp: str, logger) -> tuple:
 
     The ``all_members`` subset mask is ``np.ones(dataset_size, dtype=bool)``, so
     ``scores[rows]`` in ``run_ola.py`` is the identity and the saved vector is in
-    dataset order. That is the property everything downstream relies on, so it is
-    asserted rather than assumed -- a change to ``subset_rows`` would otherwise
-    silently reindex every contrast below while still producing plausible AUCs.
+    dataset order. That is the property everything downstream relies on. Note the
+    guard lives in ``main`` (which cross-checks the loaded membership vector
+    against ``ola_splits.npz``), not in this loader -- a change to ``subset_rows``
+    would otherwise silently reindex every contrast below while still producing
+    plausible AUCs.
 
     Args:
         report_exp (str): ``<log_dir>/report/exp``.
