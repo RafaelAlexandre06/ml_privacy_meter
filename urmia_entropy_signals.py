@@ -37,6 +37,7 @@ import torch
 from transformers import PreTrainedModel
 
 from dataset.utils import load_dataset_subsets
+from unlearner_registry import signal_cache_matches, write_signal_fingerprint
 
 _EPS = 1e-12
 
@@ -132,16 +133,20 @@ def get_urmia_entropy_signals(
     expected_cols = len(models_list)
     if os.path.exists(signal_path):
         cached = np.load(signal_path)
-        if cached.shape == (expected_rows, expected_cols):
+        if cached.shape != (expected_rows, expected_cols):
+            logger.warning(
+                "Cached entropy signals shape %s does not match expected (%d, %d); "
+                "recomputing.",
+                cached.shape,
+                expected_rows,
+                expected_cols,
+            )
+        # Same blind spot as the softmax cache: the unlearner changes values, not
+        # dimensions. See unlearner_registry.signal_cache_matches.
+        elif signal_cache_matches(signal_path, configs, logger):
             logger.info("U-RMIA entropy signals loaded from disk (%s).", signal_path)
+            write_signal_fingerprint(signal_path, configs)
             return cached
-        logger.warning(
-            "Cached entropy signals shape %s does not match expected (%d, %d); "
-            "recomputing.",
-            cached.shape,
-            expected_rows,
-            expected_cols,
-        )
 
     batch_size = configs["audit"]["batch_size"]
     model_name = configs["train"]["model_name"]
@@ -157,5 +162,6 @@ def get_urmia_entropy_signals(
         axis=1,
     )
     np.save(signal_path, signals)
+    write_signal_fingerprint(signal_path, configs)
     logger.info("U-RMIA entropy signals saved to disk (%s).", signal_path)
     return signals

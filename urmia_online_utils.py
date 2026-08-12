@@ -34,6 +34,7 @@ from dataset.utils import get_dataloader
 from models.utils import get_model
 from ola_utils import two_sided_auc
 from trainers.default_trainer import train, inference
+from unlearner_registry import check_cached_unlearn
 from unlearners import get_unlearner
 from urmia_utils import TARGET_ROLES, check_urmia_configs
 
@@ -269,25 +270,16 @@ class _MetadataStore:
             json.dump(self.meta, f, indent=4)
 
 
-def _warn_stale_unlearn(stored_meta, role, configs, logger):
-    """Warn when a cached model was unlearned with different settings than the config."""
-    stored = {
-        "algorithm": stored_meta.get("unlearn_algorithm"),
-        "params": stored_meta.get("unlearn_params", {}),
-    }
-    current = {
-        "algorithm": configs["unlearn"]["algorithm"],
-        "params": configs["unlearn"].get("params", {}),
-    }
-    if stored != current:
-        logger.warning(
-            "Cached model %s was unlearned with %s but config has %s. Reusing the "
-            "cached model; delete its .pkl (and the cached signals) or change "
-            "run.log_dir to regenerate.",
-            role,
-            stored,
-            current,
-        )
+def _check_stale_unlearn(store, role, configs, logger):
+    """Raise if the cached model for ``role`` was unlearned with other settings.
+
+    Applies to the references as much as to the target: at level 3 they are
+    train-then-unlearn, so a reference carrying the previous unlearner poisons
+    the IN/OUT distributions every scorer is calibrated against.
+    """
+    check_cached_unlearn(
+        store.meta[role], role, configs, f"{store.models_dir}/{role}.pkl", logger
+    )
 
 
 def _unlearn(model, forget_idx, retain_idx, dataset, configs, logger):
@@ -351,7 +343,7 @@ def prepare_online_target_models(models_dir, dataset, splits, configs, logger):
     # unlearned: derived from original.
     role = "unlearned"
     if store.has(role):
-        _warn_stale_unlearn(store.meta[role], role, configs, logger)
+        _check_stale_unlearn(store, role, configs, logger)
         logger.info("Model %s already trained, loading from disk", role)
         models[role] = store.load(role)
     else:
@@ -422,7 +414,7 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
     for k in range(num_ref_models):
         role = f"online_reference_{k}"
         if store.has(role):
-            _warn_stale_unlearn(store.meta[role], role, configs, logger)
+            _check_stale_unlearn(store, role, configs, logger)
             logger.info("Model %s already trained, loading from disk", role)
             refs.append(store.load(role))
             continue

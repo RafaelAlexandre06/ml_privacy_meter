@@ -1,10 +1,10 @@
 run: # Level-3 U-RMIA with the WIG unlearner (Lee et al., PoPETs 2026) — cluster-scale
   random_seed: 12345
   # MUST differ from the first WIG run (demo_urmia_online_wig): level-3 references
-  # are train-then-unlearn, so they are invalid once unlearn.params change, and the
-  # resume path LOADS cached models on a params mismatch (it only warns — see
-  # _warn_stale_unlearn, urmia_online_utils.py:268). Reusing the old log_dir would
-  # silently reproduce the broken run. Old dir kept for the record.
+  # are train-then-unlearn, so they are invalid once unlearn.params change.
+  # Pointing at the old dir is now a hard error rather than a silent reuse
+  # (unlearner_registry.check_cached_unlearn), but a fresh dir is still the right
+  # move — it keeps both runs. Old dir kept for the record.
   log_dir: demo_urmia_online_wig_ft30
   time_log: True
 

@@ -42,6 +42,12 @@ from get_signals import get_softmax
 from models.utils import get_model
 from ola_utils import two_sided_auc
 from trainers.default_trainer import train, inference
+from unlearner_registry import (
+    check_cached_unlearn,
+    signal_cache_matches,
+    validate_unlearn_params,
+    write_signal_fingerprint,
+)
 from unlearners import get_unlearner
 from visualize import plot_roc, plot_roc_log
 
@@ -79,6 +85,9 @@ def check_urmia_configs(configs: dict, dataset_size: int) -> None:
 
     # Raises NotImplementedError with the supported list if unknown.
     get_unlearner(configs["unlearn"]["algorithm"])
+    # Rejects mistyped params, which would otherwise fall back to the default and
+    # give a wrong run indistinguishable from a right one.
+    validate_unlearn_params(configs)
 
     forget_size = int(configs["unlearn"]["forget_size"])
     if forget_size < 1:
@@ -379,16 +388,8 @@ def prepare_urmia_models(
     pkl_path = f"{models_dir}/{role}.pkl"
     current_params = configs["unlearn"].get("params", {})
     if role in metadata_dict and os.path.exists(pkl_path):
-        stored_params = metadata_dict[role].get("unlearn_params", {})
-        if stored_params != current_params:
-            logger.warning(
-                "Cached unlearned model was produced with params %s but config has "
-                "%s. Reusing the cached model; delete %s (and its signals) or change "
-                "log_dir to regenerate.",
-                stored_params,
-                current_params,
-                pkl_path,
-            )
+        # Raises unless the cached model was unlearned the way this config asks.
+        check_cached_unlearn(metadata_dict[role], role, configs, pkl_path, logger)
         logger.info("Model %s already trained, loading from disk", role)
         models[role] = _load(role)
     else:
@@ -469,9 +470,10 @@ def get_urmia_signals(
     """Compute true-class softmax signals for every model on ``subset``.
 
     Cached to ``<log_dir>/signals/urmia_signals[.npy|_pop.npy]``. The cache is
-    reused only when both the row count (number of audited samples) and the
-    column count (3 + K models) match, so bumping ``num_ref_models`` correctly
-    forces a recompute.
+    reused only when the row count (number of audited samples), the column count
+    (3 + K models) and the ``unlearn_fingerprint`` sidecar all match, so bumping
+    ``num_ref_models`` or changing the unlearner forces a recompute. Arrays
+    written before the sidecar existed are accepted and stamped on first use.
 
     Args:
         models_list (list): Ordered models [original, unlearned, retrained, ref_0..].
@@ -492,15 +494,22 @@ def get_urmia_signals(
     expected_cols = len(models_list)
     if os.path.exists(signal_path):
         cached = np.load(signal_path)
-        if cached.shape == (expected_rows, expected_cols):
+        if cached.shape != (expected_rows, expected_cols):
+            logger.warning(
+                "Cached signals shape %s does not match expected (%d, %d); "
+                "recomputing.",
+                cached.shape,
+                expected_rows,
+                expected_cols,
+            )
+        # Shape is blind to the unlearner: swapping it changes every value in the
+        # 'unlearned' column and no dimension at all.
+        elif signal_cache_matches(signal_path, configs, logger):
             logger.info("U-RMIA signals loaded from disk (%s).", signal_path)
+            # Stamps legacy arrays that predate the sidecar, so the next run has
+            # something to compare against.
+            write_signal_fingerprint(signal_path, configs)
             return cached
-        logger.warning(
-            "Cached signals shape %s does not match expected (%d, %d); recomputing.",
-            cached.shape,
-            expected_rows,
-            expected_cols,
-        )
 
     batch_size = configs["audit"]["batch_size"]
     model_name = configs["train"]["model_name"]
@@ -516,6 +525,7 @@ def get_urmia_signals(
     ]
     signals = np.concatenate(signals, axis=1)
     np.save(signal_path, signals)
+    write_signal_fingerprint(signal_path, configs)
     logger.info("U-RMIA signals saved to disk (%s).", signal_path)
     return signals
 

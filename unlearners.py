@@ -18,6 +18,26 @@ The interface intentionally receives both the forget and retain loaders even
 when an algorithm ignores them (Gaussian noise ignores both), so that
 gradient-based methods can be added later without changing the signature.
 
+Two further requirements, unenforceable by the signature and checked instead by
+``check_unlearners.py``: the returned module must be on **CPU** with the same
+``state_dict`` keys it was given, and ``model`` must **not be mutated in place**
+-- the caller passes the live ``original`` target model
+(``urmia_utils.py:409``), so an unlearner that skips ``copy.deepcopy`` corrupts
+that role's signals with no error anywhere.
+
+Adding one
+----------
+Decorate it with ``unlearner_registry.register``, declaring the
+``unlearn.params`` keys it reads::
+
+    @register("my_method", OPTIMIZER_PARAMS | {"epochs", "alpha"})
+    def my_method(model, forget_loader, retain_loader, ...):
+
+If it lives in its own module (as ``wig`` does), add an import for that module
+at the bottom of this file so the decorator runs. Nothing in the pipeline needs
+touching: ``run_urmia.py`` and ``run_urmia_online.py`` reach every algorithm
+through ``get_unlearner`` alone.
+
 Currently implemented:
 - ``gaussian_noise``: add calibrated Gaussian noise to all model weights. Blunt and
   data-independent: it does not target the forget set and tends to degrade the
@@ -46,8 +66,15 @@ import torch
 from torch import nn
 
 from trainers.default_trainer import get_optimizer
+from unlearner_registry import (  # noqa: F401  (re-exported for existing importers)
+    OPTIMIZER_PARAMS,
+    UNLEARNERS,
+    get_unlearner,
+    register,
+)
 
 
+@register("gaussian_noise", {"noise_std"})
 def gaussian_noise(
     model: torch.nn.Module,
     forget_loader: torch.utils.data.DataLoader,
@@ -126,6 +153,7 @@ def _cycle(loader):
             yield batch
 
 
+@register("neggrad", OPTIMIZER_PARAMS | {"epochs"})
 def neggrad(
     model: torch.nn.Module,
     forget_loader: torch.utils.data.DataLoader,
@@ -169,6 +197,7 @@ def neggrad(
     return unlearned.to("cpu")
 
 
+@register("random_label", OPTIMIZER_PARAMS | {"epochs"})
 def random_label(
     model: torch.nn.Module,
     forget_loader: torch.utils.data.DataLoader,
@@ -226,6 +255,10 @@ def random_label(
     return unlearned.to("cpu")
 
 
+@register(
+    "neggrad_plus",
+    OPTIMIZER_PARAMS | {"epochs", "forget_coef", "retain_coef", "forget_loss_cap"},
+)
 def neggrad_plus(
     model: torch.nn.Module,
     forget_loader: torch.utils.data.DataLoader,
@@ -306,34 +339,9 @@ def neggrad_plus(
     return unlearned.to("cpu")
 
 
-# Imported here (not at the top) so wig_unlearner can lazily import
-# _optimizer_config from this module without a circular-import failure.
-from wig_unlearner import wig  # noqa: E402
-
-UNLEARNERS = {
-    "gaussian_noise": gaussian_noise,
-    "neggrad": neggrad,
-    "random_label": random_label,
-    "neggrad_plus": neggrad_plus,
-    "wig": wig,
-}
-
-
-def get_unlearner(name: str):
-    """Look up an unlearning algorithm by name.
-
-    Args:
-        name (str): The ``unlearn.algorithm`` config value.
-
-    Raises:
-        NotImplementedError: If the algorithm is not registered.
-
-    Returns:
-        Callable: The unlearner function following the module's interface.
-    """
-    if name not in UNLEARNERS:
-        raise NotImplementedError(
-            f"Unlearning algorithm '{name}' is not implemented. "
-            f"Supported: {list(UNLEARNERS)}"
-        )
-    return UNLEARNERS[name]
+# Unlearners that live in their own module are imported here, at the bottom,
+# purely so their @register decorator runs. The placement matters: those modules
+# import _optimizer_config from this one, and by this line it is defined, so the
+# partially-initialized module they see is complete enough. Add a line here for
+# every new external unlearner.
+import wig_unlearner  # noqa: E402,F401  (imported for its @register side effect)

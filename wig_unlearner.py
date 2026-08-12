@@ -57,6 +57,9 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from trainers.default_trainer import get_optimizer
+# From the registry, not from unlearners: importing unlearners here would be a
+# cycle, since unlearners imports this module at its bottom to run @register.
+from unlearner_registry import OPTIMIZER_PARAMS, register
 
 # Added to every gradient std so OVL stays finite when a weight's gradient is
 # (numerically) constant across batches; mirrors the reference's +1e-9.
@@ -182,6 +185,7 @@ def _gaussian_ovl(
     return torch.clamp(overlap, 0.0, 1.0)
 
 
+@register("wig", OPTIMIZER_PARAMS | {"init_ratio", "grad_batch_size", "epochs"})
 def wig(
     model: torch.nn.Module,
     forget_loader: DataLoader,
