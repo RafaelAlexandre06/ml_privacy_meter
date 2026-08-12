@@ -1,0 +1,47 @@
+run: # Level-2 (naive offline U-RMIA) - neggrad_plus on cifar100, H100 cluster scale.
+  # One of the 10 level-2 legs in sweep_l2.sh. Every leg shares random_seed,
+  # model, training recipe and forget_size, so a difference between two legs is
+  # the unlearner or the attack level and nothing else.
+  random_seed: 12345 # Same seed => same F/R/U split in every leg
+  log_dir: sweep_l2_cifar100_neggrad_plus
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 16 # Same K in l2 and l3, so "fewer refs" cannot explain a gap
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 20000 # Signal inference only (forward passes); fits an H100 easily
+  population_size: 10000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  # Kept at 256, NOT raised for the H100: the fixed LR schedule was designed
+  # around this batch size, and the existing PC results stop being comparable
+  # if it changes. The H100 win here is wall-clock per model, not batch size.
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: neggrad_plus
+  forget_size: 500
+  params:
+  # Ascent on forget + descent on retain (Kurmanji et al.), the best-behaved of
+  # the four: demo_urmia_pc_neggrad_plus_capped kept test_acc 0.700 while
+  # pulling forget_acc to 0.390.
+    epochs: 2
+    learning_rate: 0.002
+    forget_coef: 0.5
+    retain_coef: 1.0
+    # forget_loss_cap deliberately unset -> defaults to ln(100) = 4.605.
+    # Re-tune from this run's retrained.forget_loss (models/*_metadata.json).
+
+data:
+  dataset: cifar100
+  data_dir: data

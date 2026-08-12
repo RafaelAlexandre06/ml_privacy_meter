@@ -1,0 +1,48 @@
+run: # Level-3 (strong U-RMIA, train-then-unlearn references) - random_label on cifar100, H100 cluster scale.
+  # One of the 10 level-3 legs in sweep_l3.sh. Every leg shares random_seed,
+  # model, training recipe and forget_size, so a difference between two legs is
+  # the unlearner or the attack level and nothing else.
+  random_seed: 12345 # Same seed => same F/R/U split in every leg
+  log_dir: sweep_l3_cifar100_random_label
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 16 # Same K in l2 and l3, so "fewer refs" cannot explain a gap
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia_online
+  batch_size: 20000 # Signal inference only (forward passes); fits an H100 easily
+  population_size: 10000
+  # Adds the modified-entropy statistic (conf_global / mentr_global /
+  # ulira_mentr columns). One extra inference pass, no extra training.
+  entropy_signal: True
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  # Kept at 256, NOT raised for the H100: the fixed LR schedule was designed
+  # around this batch size, and the existing PC results stop being comparable
+  # if it changes. The H100 win here is wall-clock per model, not batch size.
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: random_label
+  forget_size: 500
+  params:
+  # Amnesiac-style relabeling: keep the forget images, train them toward a
+  # random wrong label.
+  # epochs 5 @ lr 0.01 (configs/urmia/cifar10_pc_random_label.yaml) gave
+  # test_acc 0.078 on demo_urmia_pc_random_label -- the model was destroyed, so
+  # its AUC of 0.505 measured nothing. 10x lower LR and fewer epochs here.
+    epochs: 3
+    learning_rate: 0.001
+
+data:
+  dataset: cifar100
+  data_dir: data

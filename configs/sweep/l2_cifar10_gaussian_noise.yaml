@@ -1,0 +1,47 @@
+run: # Level-2 (naive offline U-RMIA) - gaussian_noise on cifar10, H100 cluster scale.
+  # One of the 10 level-2 legs in sweep_l2.sh. Every leg shares random_seed,
+  # model, training recipe and forget_size, so a difference between two legs is
+  # the unlearner or the attack level and nothing else.
+  random_seed: 12345 # Same seed => same F/R/U split in every leg
+  log_dir: sweep_l2_cifar10_gaussian_noise
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 16 # Same K in l2 and l3, so "fewer refs" cannot explain a gap
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 20000 # Signal inference only (forward passes); fits an H100 easily
+  population_size: 10000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  # Kept at 256, NOT raised for the H100: the fixed LR schedule was designed
+  # around this batch size, and the existing PC results stop being comparable
+  # if it changes. The H100 win here is wall-clock per model, not batch size.
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: gaussian_noise
+  forget_size: 500
+  params:
+  # Blunt data-independent baseline: it perturbs every weight and never looks at
+  # the forget set, so it cannot target anything -- the useful result is the
+  # utility cost it pays for whatever privacy it buys.
+  # noise_std 0.01 (the old configs/urmia/cifar10.yaml value) took a wrn28-1
+  # from test 0.688 to 0.360 on demo_urmia_pc -- a lobotomy, not unlearning.
+  # The weights of that model have std 0.0578, so 0.01 is ~17% of the weight
+  # scale. 0.003 is ~5.2%, chosen to stay in the regime where the model
+  # still works. Raise it only if 'unlearned' AUC does not move at all.
+    noise_std: 0.003
+
+data:
+  dataset: cifar10
+  data_dir: data

@@ -1,0 +1,49 @@
+run: # Level-2 (naive offline U-RMIA) - wig on cifar10, H100 cluster scale.
+  # One of the 10 level-2 legs in sweep_l2.sh. Every leg shares random_seed,
+  # model, training recipe and forget_size, so a difference between two legs is
+  # the unlearner or the attack level and nothing else.
+  random_seed: 12345 # Same seed => same F/R/U split in every leg
+  log_dir: sweep_l2_cifar10_wig
+  time_log: True
+
+audit:
+  privacy_game: privacy_loss_model
+  algorithm: RMIA
+  num_ref_models: 16 # Same K in l2 and l3, so "fewer refs" cannot explain a gap
+  offline_a: 0.3
+  device: cuda:0
+  report_log: report_urmia
+  batch_size: 20000 # Signal inference only (forward passes); fits an H100 easily
+  population_size: 10000
+
+train:
+  model_name: wrn28-1
+  device: cuda:0
+  # Kept at 256, NOT raised for the H100: the fixed LR schedule was designed
+  # around this batch size, and the existing PC results stop being comparable
+  # if it changes. The H100 win here is wall-clock per model, not batch size.
+  batch_size: 256
+  optimizer: SGD
+  learning_rate: 0.1
+  weight_decay: 0.0005
+  epochs: 100
+
+unlearn:
+  algorithm: wig
+  forget_size: 500
+  params:
+  # WIG (Lee et al., PoPETs 2026): OVL-scored weight re-initialization plus
+  # retain fine-tuning. Structural rather than output-targeting, so it should
+  # not over-unlearn any single statistic.
+  # The 30-epoch fine-tune is the fix for the first WIG run, where 5 epochs @
+  # lr 0.01 left every model mid-recovery (retain acc 0.5602). Not yet
+  # validated at this budget -- check retain/test accuracy before reading the
+  # privacy numbers.
+    init_ratio: 0.3
+    grad_batch_size: 32
+    epochs: 30
+    learning_rate: 0.02
+
+data:
+  dataset: cifar10
+  data_dir: data
