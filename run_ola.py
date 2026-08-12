@@ -274,6 +274,10 @@ def main():
         metadata,
         configs,
         int(non_members.sum()),
+        # Positives per subset. The outer block scores ~1,000 points against the
+        # same ~25,000 non-members the inner block uses ~24,000 against, so they
+        # do not share a null SE.
+        {s: int((rows & (is_member == 1)).sum()) for s, rows in subset_rows.items()},
         logger,
     )
     logger.info("Total runtime: %0.1f s", time.time() - start_time)

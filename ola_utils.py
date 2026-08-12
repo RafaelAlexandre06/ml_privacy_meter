@@ -68,6 +68,27 @@ AUDIT_SUBSETS = ["outer", "inner", "all_members"]
 MIN_CEILING_AUC = 0.55
 
 
+def two_sided_auc(auc: float) -> float:
+    """Fold an AUC onto ``[0.5, 1]``: an inverted signal is still a signal.
+
+    The OLA outer-layer AUCs come out around 0.18-0.25 -- far *below* chance, not
+    near it. Read one-sided that looks like strong protection; it is the
+    opposite. An attacker who notices the sign flips the decision rule and gets
+    the complement, so 0.18 is 0.82 of separation. Whether that separation is
+    *membership* leakage is a different question, and the one
+    ``excess_over_onion`` answers: the ``onion`` model genuinely never trained on
+    the outer layer, so its two-sided AUC is the difficulty floor -- how well the
+    points can be picked out for being atypical rather than for being members.
+
+    Args:
+        auc (float): One-sided ROC AUC.
+
+    Returns:
+        float: ``max(auc, 1 - auc)``.
+    """
+    return max(float(auc), 1.0 - float(auc))
+
+
 def check_ola_configs(configs: dict, dataset_size: int) -> None:
     """Validate the OLA config block.
 
@@ -259,16 +280,43 @@ def select_outer_layer(
     outer = np.sort(target_train[order[:n_outer]])
 
     cut = member_asr[order[n_outer - 1]]
+
+    # ASR is a mean of at most one binary outcome per selection model, so with a
+    # 32-model selection half it takes at most 33 distinct values. Ties at the
+    # cut are the normal case, not an edge case, and np.argsort(..., "stable")
+    # breaks them by position in target_train -- which is sorted ascending, so
+    # the admitted slice is the LOWEST-INDEXED members of the tied group rather
+    # than a random sample of it. On CIFAR-10 the index order is the class order,
+    # so a large tie means the outer layer is skewed toward the early classes.
+    # Nothing downstream can detect this, hence the census.
+    tied = int(np.sum(member_asr == cut))
+    tied_admitted = int(np.sum(member_asr[order[:n_outer]] == cut))
     logger.info(
         "Outer layer: %d of %d members, ASR >= %.4f (member mean %.4f). "
-        "Outer mean ASR %.4f vs inner mean %.4f.",
+        "Outer mean ASR %.4f vs inner mean %.4f. %d members tie at the cut; "
+        "%d of them admitted.",
         n_outer,
         len(target_train),
         cut,
         member_asr.mean(),
         member_asr[order[:n_outer]].mean(),
         member_asr[order[n_outer:]].mean(),
+        tied,
+        tied_admitted,
     )
+    if tied > 2 * tied_admitted and tied_admitted > 0:
+        logger.warning(
+            "Ties dominate the outer-layer cut: %d members share ASR %.4f but "
+            "only %d fit, so %.0f%% of the outer layer was chosen by dataset "
+            "index, not by attackability. The tie-break is deterministic and "
+            "ascending, which biases selection toward low indices (on CIFAR-10, "
+            "toward the early classes). Raise num_shadow_models to give ASR more "
+            "resolution, or lower selection_fpr so fewer points saturate.",
+            tied,
+            cut,
+            tied_admitted,
+            100.0 * tied_admitted / n_outer,
+        )
     if cut <= member_asr.mean():
         logger.warning(
             "The outer-layer cut is at or below the mean ASR: the attack is not "
@@ -531,12 +579,33 @@ def report_ola_attack(
     return result
 
 
+def mann_whitney_null_se(n_pos: int, n_neg: int) -> float:
+    """Standard error of an AUC under the null, from the Mann-Whitney variance.
+
+    Depends on **both** group sizes, which is easy to get wrong here: the three
+    audit subsets share one non-member set but have very different positive
+    counts (1,000 outer vs 24,000 inner), so a single SE reused across them
+    misstates the outer block by a factor of ~3.6.
+
+    Args:
+        n_pos (int): Positives (members in the subset).
+        n_neg (int): Negatives (non-members).
+
+    Returns:
+        float: ``sqrt((n_pos + n_neg + 1) / (12 * n_pos * n_neg))``.
+    """
+    if n_pos <= 0 or n_neg <= 0:
+        return float("nan")
+    return math.sqrt((n_pos + n_neg + 1) / (12.0 * n_pos * n_neg))
+
+
 def log_ola_summary(
     report_dir: str,
     results: dict,
     metadata: dict,
     configs: dict,
     n_nonmembers: int,
+    subset_sizes: dict,
     logger: logging.Logger,
 ) -> None:
     """Log and save the outer/inner comparison across targets and scorers.
@@ -547,6 +616,9 @@ def log_ola_summary(
         metadata (dict): Per-role accuracies from the metadata store.
         configs (dict): Full config dictionary.
         n_nonmembers (int): Number of non-members each AUC is measured against.
+        subset_sizes (dict): ``{subset: number of members in it}``. Needed
+            because the null SE scales with the smaller group, and the outer
+            subset has ~24x fewer positives than the inner one.
         logger (logging.Logger): Logger object.
     """
     scorers = list(next(iter(next(iter(results.values())).values())).keys())
@@ -557,13 +629,19 @@ def log_ola_summary(
         logger.info("=== %s ===", subset.upper())
         header = f"{'role':<10}"
         for scorer in scorers:
-            header += f" {scorer + '_auc':>18} {scorer + '_tpr@.1%':>18}"
+            header += (
+                f" {scorer + '_auc':>16} {scorer + '_2sided':>16}"
+                f" {scorer + '_tpr@.1%':>16}"
+            )
         logger.info(header)
         for role in TARGET_ROLES:
             line = f"{role:<10}"
             for scorer in scorers:
                 res = results[role][subset][scorer]
-                line += f" {res['auc']:>18.4f} {res['one_tenth_fpr']:>18.4f}"
+                line += (
+                    f" {res['auc']:>16.4f} {two_sided_auc(res['auc']):>16.4f}"
+                    f" {res['one_tenth_fpr']:>16.4f}"
+                )
             logger.info(line)
 
     for role in TARGET_ROLES:
@@ -573,6 +651,9 @@ def log_ola_summary(
                 subset: {
                     scorer: {
                         "auc": float(results[role][subset][scorer]["auc"]),
+                        "two_sided_auc": two_sided_auc(
+                            results[role][subset][scorer]["auc"]
+                        ),
                         "one_fpr": float(results[role][subset][scorer]["one_fpr"]),
                         "one_tenth_fpr": float(
                             results[role][subset][scorer]["one_tenth_fpr"]
@@ -596,7 +677,10 @@ def log_ola_summary(
     # there and does not here. The useful bar is absolute: the undefended
     # ceiling has to be high enough that a defense pushing it down is a
     # measurable effect rather than a rounding difference.
-    null_se = math.sqrt((2 * n_nonmembers + 1) / (12.0 * n_nonmembers * n_nonmembers))
+    # The control reads the all_members row, so its SE uses that subset's sizes.
+    null_se = mann_whitney_null_se(
+        subset_sizes.get("all_members", n_nonmembers), n_nonmembers
+    )
     chance_cut = 0.5 + 2.0 * null_se
     vanilla_auc = {
         s: max(
@@ -641,6 +725,65 @@ def log_ola_summary(
         "chance_cut": float(chance_cut),
         "min_ceiling_auc": MIN_CEILING_AUC,
     }
+
+    # The contrast the whole run turns on. 'onion' was retrained without the
+    # outer layer, so whatever separation a scorer still finds against it is the
+    # ground-truth floor: these are the most atypical points in the dataset, and
+    # a model that never saw them fails on them too. Reporting 'ola' against 0.5
+    # would credit the defense with that floor. Reporting it against 'onion'
+    # asks the only question that matters -- does keeping the points in training
+    # but attenuating them leak *more* than deleting them outright?
+    if "onion" in results and "ola" in results:
+
+        # Per subset, because the outer block has ~1,000 positives and the inner
+        # one ~24,000 against the same non-members.
+        subset_se = {
+            subset: mann_whitney_null_se(
+                subset_sizes.get(subset, n_nonmembers), n_nonmembers
+            )
+            for subset in AUDIT_SUBSETS
+        }
+
+        def _excess(subset, scorer):
+            defended = two_sided_auc(results["ola"][subset][scorer]["auc"])
+            floor = two_sided_auc(results["onion"][subset][scorer]["auc"])
+            return {
+                "ola": defended,
+                "onion": floor,
+                "excess": defended - floor,
+                "excess_null_se": float((defended - floor) / subset_se[subset]),
+                "null_se": float(subset_se[subset]),
+            }
+
+        summary["excess_over_onion"] = {
+            subset: {scorer: _excess(subset, scorer) for scorer in scorers}
+            for subset in AUDIT_SUBSETS
+        }
+        logger.info("")
+        logger.info("=== EXCESS OVER THE ONION FLOOR (two-sided) ===")
+        logger.info(
+            "%-12s%9s%s", "subset", "null_se", "".join(f"{s:>18}" for s in scorers)
+        )
+        for subset in AUDIT_SUBSETS:
+            cells = summary["excess_over_onion"][subset]
+            logger.info(
+                "%-12s%9.5f%s",
+                subset,
+                subset_se[subset],
+                "".join(
+                    f"{cells[s]['excess']:>+11.4f}/{cells[s]['excess_null_se']:>+5.1f}"
+                    for s in scorers
+                ),
+            )
+        logger.info(
+            "Cells are excess/(null SE). Positive = 'ola' is more attackable "
+            "than deleting the points would have been; negative = less. Within "
+            "a couple of SE of zero means attenuation is indistinguishable from "
+            "deletion, which is what OLA claims (at a lower utility cost). The "
+            "SE is a yardstick, not a test: it is the null SE of a single AUC, "
+            "while this is a difference of two correlated ones, so treat it as "
+            "an order-of-magnitude scale."
+        )
 
     logger.info("")
     logger.info(
