@@ -15,6 +15,10 @@ audit:
   report_log: report_urmia
   batch_size: 20000 # Signal inference only (forward passes); fits an H100 easily
   population_size: 10000
+  # Retain-set leakage (Hayes et al. 2024): sample this many retain points
+  # and measure whether unlearning F left them more exposed to a standard
+  # MIA. Reuses the trained models + references; one extra signal pass only.
+  retain_audit_size: 1000
 
 train:
   model_name: wrn28-1

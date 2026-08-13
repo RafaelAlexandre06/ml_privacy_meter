@@ -15,6 +15,10 @@ audit:
   report_log: report_urmia_online
   batch_size: 20000 # Signal inference only (forward passes); fits an H100 easily
   population_size: 10000
+  # Retain-set leakage (Hayes et al. 2024): sample this many retain points
+  # and measure whether unlearning F left them more exposed to a standard
+  # MIA. Reuses the trained models + references; one extra signal pass only.
+  retain_audit_size: 1000
   # Adds the modified-entropy statistic (conf_global / mentr_global /
   # ulira_mentr columns). One extra inference pass, no extra training.
   entropy_signal: True
