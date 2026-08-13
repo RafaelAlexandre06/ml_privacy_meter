@@ -58,6 +58,11 @@ from urmia_online_utils import (
     prepare_online_reference_models,
     log_online_summary,
 )
+from retain_leakage import (
+    select_retain_audit,
+    retain_ref_in,
+    compute_retain_leakage,
+)
 
 # Enable benchmark mode in cudnn to improve performance when input sizes are consistent
 torch.backends.cudnn.benchmark = True
@@ -200,8 +205,39 @@ def main():
         }
     logger.info("Auditing took %0.1f seconds", time.time() - baseline_time)
 
+    # Stage 6 (optional): retain-set leakage (Hayes et al. 2024). Reuses the same
+    # models and references; needs only one signal pass over a retain sample.
+    retain_analysis = None
+    retain_audit_size = configs["audit"].get("retain_audit_size")
+    if retain_audit_size:
+        baseline_time = time.time()
+        retain_audit_idx = select_retain_audit(
+            splits["retain_indices"], retain_audit_size, configs["run"]["random_seed"]
+        )
+        retain_signals = get_urmia_signals(
+            ordered_models,
+            Subset(dataset, retain_audit_idx),
+            configs,
+            logger,
+            signal_tag="_retain",
+        )
+        retain_in = retain_ref_in(splits, retain_audit_idx)
+        unseen_block = signals[len(forget_indices):]
+        retain_analysis = compute_retain_leakage(
+            retain_signals, retain_in, unseen_block, pop_signals, offline_a
+        )
+        logger.info(
+            "Retain-leakage analysis took %0.1f seconds", time.time() - baseline_time
+        )
+
     log_online_summary(
-        directories["report_dir"], results, target_metadata, configs, logger, attacks
+        directories["report_dir"],
+        results,
+        target_metadata,
+        configs,
+        logger,
+        attacks,
+        retain_analysis,
     )
 
     logger.info("Total runtime: %0.5f seconds", time.time() - start_time)

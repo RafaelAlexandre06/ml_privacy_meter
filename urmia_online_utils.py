@@ -529,7 +529,9 @@ def check_positive_control(original_summary, attacks, forget_size, logger):
     }
 
 
-def log_online_summary(report_dir, results, metadata, configs, logger, attacks=None):
+def log_online_summary(
+    report_dir, results, metadata, configs, logger, attacks=None, retain_analysis=None
+):
     """Log and save the naive-vs-strong comparison across all targets and scorers.
 
     Args:
@@ -541,6 +543,10 @@ def log_online_summary(report_dir, results, metadata, configs, logger, attacks=N
         attacks (Optional[list]): Scorer names to tabulate, in column order.
             Defaults to ``ATTACKS`` (the three confidence-based scorers); the
             entry point extends it when ``audit.entropy_signal`` is enabled.
+        retain_analysis (dict): Optional output of
+            ``retain_leakage.compute_retain_leakage``; when present it is logged
+            below the forget table and stored under ``retain_leakage`` in the
+            summary JSON.
     """
     if attacks is None:
         attacks = ATTACKS
@@ -612,6 +618,13 @@ def log_online_summary(report_dir, results, metadata, configs, logger, attacks=N
             "stronger scorer tightens the bound, but taking a max over many scorers "
             "also inflates it slightly under the null."
         )
+
+    if retain_analysis is not None:
+        from retain_leakage import format_retain_rows
+
+        for line in format_retain_rows(retain_analysis):
+            logger.info(line)
+        summary["retain_leakage"] = retain_analysis
 
     with open(f"{report_dir}/urmia_online_summary.json", "w") as f:
         json.dump(summary, f, indent=4)

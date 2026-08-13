@@ -466,14 +466,16 @@ def get_urmia_signals(
     configs: dict,
     logger: logging.Logger,
     is_population: bool = False,
+    signal_tag: str = "",
 ) -> np.ndarray:
     """Compute true-class softmax signals for every model on ``subset``.
 
-    Cached to ``<log_dir>/signals/urmia_signals[.npy|_pop.npy]``. The cache is
-    reused only when the row count (number of audited samples), the column count
-    (3 + K models) and the ``unlearn_fingerprint`` sidecar all match, so bumping
-    ``num_ref_models`` or changing the unlearner forces a recompute. Arrays
-    written before the sidecar existed are accepted and stamped on first use.
+    Cached to ``<log_dir>/signals/urmia_signals[<tag>][.npy|_pop.npy]``. The cache
+    is reused only when the row count (number of audited samples), the column
+    count (3 + K models) and the ``unlearn_fingerprint`` sidecar all match, so
+    bumping ``num_ref_models`` or changing the unlearner forces a recompute.
+    Arrays written before the sidecar existed are accepted and stamped on first
+    use.
 
     Args:
         models_list (list): Ordered models [original, unlearned, retrained, ref_0..].
@@ -481,6 +483,10 @@ def get_urmia_signals(
         configs (dict): Full config dictionary.
         logger (logging.Logger): Logger object for the current run.
         is_population (bool): Whether these are population signals.
+        signal_tag (str): Cache-name discriminator for signal sets that live
+            alongside the audit set on the same models (e.g. ``"_retain"``).
+            Empty (the default) keeps the original audit/population paths, so
+            every existing cache and caller is unaffected.
 
     Returns:
         np.ndarray: Signals of shape (len(subset), len(models_list)).
@@ -488,7 +494,7 @@ def get_urmia_signals(
     signal_dir = f"{configs['run']['log_dir']}/signals"
     Path(signal_dir).mkdir(parents=True, exist_ok=True)
     suffix = "_pop.npy" if is_population else ".npy"
-    signal_path = f"{signal_dir}/urmia_signals{suffix}"
+    signal_path = f"{signal_dir}/urmia_signals{signal_tag}{suffix}"
 
     expected_rows = len(subset)
     expected_cols = len(models_list)
@@ -595,6 +601,7 @@ def log_urmia_summary(
     metadata: dict,
     configs: dict,
     logger: logging.Logger,
+    retain_analysis: dict = None,
 ) -> None:
     """Log and save the comparison across original / unlearned / retrained.
 
@@ -604,6 +611,10 @@ def log_urmia_summary(
         metadata (dict): The models metadata dict (accuracies per role).
         configs (dict): Full config dictionary.
         logger (logging.Logger): Logger object for the current run.
+        retain_analysis (dict): Optional output of
+            ``retain_leakage.compute_retain_leakage``; when present it is logged
+            below the forget table and stored under ``retain_leakage`` in the
+            summary JSON.
     """
     header = (
         f"{'role':<10} {'AUC':>8} {'2sided':>8} {'TPR@1%':>8} {'TPR@.1%':>8} "
@@ -652,6 +663,13 @@ def log_urmia_summary(
         "protecting privacy. NOTE: this offline (level-2) attack is one-sided and "
         "poorly calibrated for over-unlearning; the level-3 attack is the honest test."
     )
+
+    if retain_analysis is not None:
+        from retain_leakage import format_retain_rows
+
+        for line in format_retain_rows(retain_analysis):
+            logger.info(line)
+        summary["retain_leakage"] = retain_analysis
 
     with open(f"{report_dir}/urmia_summary.json", "w") as f:
         json.dump(summary, f, indent=4)
