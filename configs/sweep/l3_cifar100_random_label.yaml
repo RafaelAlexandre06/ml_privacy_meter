@@ -19,6 +19,9 @@ audit:
   # and measure whether unlearning F left them more exposed to a standard
   # MIA. Reuses the trained models + references; one extra signal pass only.
   retain_audit_size: 1000
+  # Attack-grade three-way test (Hayes et al. 2024 App. D.2): persists each
+  # reference's pre-unlearn checkpoint and adds one signal pass over it.
+  three_way: True
   # Adds the modified-entropy statistic (conf_global / mentr_global /
   # ulira_mentr columns). One extra inference pass, no extra training.
   entropy_signal: True

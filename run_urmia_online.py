@@ -27,6 +27,7 @@ Usage:
 """
 
 import argparse
+import gc
 import time
 
 import numpy as np
@@ -56,6 +57,7 @@ from urmia_online_utils import (
     get_or_create_online_splits,
     prepare_online_target_models,
     prepare_online_reference_models,
+    load_online_base_references,
     log_online_summary,
 )
 from retain_leakage import (
@@ -63,6 +65,7 @@ from retain_leakage import (
     retain_ref_in,
     compute_retain_leakage,
 )
+from three_way_attack import compute_three_way
 
 # Enable benchmark mode in cudnn to improve performance when input sizes are consistent
 torch.backends.cudnn.benchmark = True
@@ -230,6 +233,26 @@ def main():
             "Retain-leakage analysis took %0.1f seconds", time.time() - baseline_time
         )
 
+    # Stage 6b (optional): attack-grade three-way test (Hayes et al. 2024, App.
+    # D.2). Fits the trained world from the pre-unlearn reference checkpoints
+    # that audit.three_way persisted; one signal pass over them.
+    three_way = None
+    if configs["audit"].get("three_way"):
+        baseline_time = time.time()
+        base_refs = load_online_base_references(
+            directories["models_dir"], configs, num_ref_models
+        )
+        base_signals = get_urmia_signals(
+            base_refs, audit_subset, configs, logger, signal_tag="_base"
+        )
+        del base_refs
+        gc.collect()
+        torch.cuda.empty_cache()
+        three_way = compute_three_way(
+            signals, base_signals, ref_in, len(forget_indices)
+        )
+        logger.info("Three-way analysis took %0.1f seconds", time.time() - baseline_time)
+
     log_online_summary(
         directories["report_dir"],
         results,
@@ -238,6 +261,7 @@ def main():
         logger,
         attacks,
         retain_analysis,
+        three_way,
     )
 
     logger.info("Total runtime: %0.5f seconds", time.time() - start_time)

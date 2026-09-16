@@ -394,6 +394,12 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
     Each reference k trains on its retain chunk plus the audit points assigned IN
     for k, then unlearns those IN points with the same unlearner as the target.
 
+    With ``audit.three_way`` the pre-unlearn state is also persisted as
+    ``online_reference_k_base`` before the unlearner runs. That checkpoint is
+    what the three-way test fits its trained world from, and because it carries
+    no unlearn provenance it is reused across unlearner changes: a later sweep
+    loads the base and re-runs only the unlearn step.
+
     Returns:
         list: The K unlearned reference models, ordered by index.
     """
@@ -410,22 +416,38 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
     ref_unlearn = splits["ref_unlearn_membership"]
     num_ref_models = ref_retain.shape[0]
 
+    three_way = bool(configs["audit"].get("three_way", False))
     refs = []
     for k in range(num_ref_models):
         role = f"online_reference_{k}"
-        if store.has(role):
+        role_base = f"{role}_base"
+        if store.has(role) and (not three_way or store.has(role_base)):
             _check_stale_unlearn(store, role, configs, logger)
             logger.info("Model %s already trained, loading from disk", role)
             refs.append(store.load(role))
             continue
+        if three_way and store.has(role):
+            # The pre-unlearn state cannot be recovered from the unlearned one,
+            # and a fresh base paired with an old unlearned pkl would not be the
+            # same model, so both are regenerated.
+            logger.warning(
+                "%s exists without %s; regenerating both", role, role_base
+            )
 
         retain_idx = np.where(ref_retain[k])[0]
         in_idx = audit_indices[ref_unlearn[k]]
         train_idx = np.concatenate([retain_idx, in_idx])
 
-        model, metadata = _train_model(
-            role, train_idx, dataset, dataset_size, configs, logger
-        )
+        if three_way and store.has(role_base):
+            logger.info("Model %s already trained, loading from disk", role_base)
+            model = store.load(role_base)
+            metadata = dict(store.meta[role_base])
+        else:
+            model, metadata = _train_model(
+                role, train_idx, dataset, dataset_size, configs, logger
+            )
+            if three_way:
+                store.persist(role_base, model, {**metadata, "role": role_base})
         logger.info(
             "%s: unlearning %d IN audit points (train-then-unlearn)", role, len(in_idx)
         )
@@ -529,8 +551,49 @@ def check_positive_control(original_summary, attacks, forget_size, logger):
     }
 
 
+def load_online_base_references(models_dir, configs, num_ref_models):
+    """Load the K pre-unlearn reference checkpoints persisted by ``audit.three_way``.
+
+    Args:
+        models_dir (str): ``<log_dir>/models``.
+        configs (dict): Full config dictionary.
+        num_ref_models (int): K.
+
+    Returns:
+        list: The base reference models, ordered by index.
+
+    Raises:
+        FileNotFoundError: If any base checkpoint is missing. A run made without
+            ``audit.three_way`` cannot be upgraded in place.
+    """
+    store = _MetadataStore(
+        models_dir,
+        configs["train"]["model_name"],
+        configs["data"]["dataset"],
+        configs,
+    )
+    refs = []
+    for k in range(num_ref_models):
+        role = f"online_reference_{k}_base"
+        if not store.has(role):
+            raise FileNotFoundError(
+                f"{models_dir}/{role}.pkl is missing. The three-way test needs the "
+                "pre-unlearn reference checkpoints, which are only written when "
+                "audit.three_way is set at reference-training time."
+            )
+        refs.append(store.load(role))
+    return refs
+
+
 def log_online_summary(
-    report_dir, results, metadata, configs, logger, attacks=None, retain_analysis=None
+    report_dir,
+    results,
+    metadata,
+    configs,
+    logger,
+    attacks=None,
+    retain_analysis=None,
+    three_way=None,
 ):
     """Log and save the naive-vs-strong comparison across all targets and scorers.
 
@@ -547,6 +610,9 @@ def log_online_summary(
             ``retain_leakage.compute_retain_leakage``; when present it is logged
             below the forget table and stored under ``retain_leakage`` in the
             summary JSON.
+        three_way (dict): Optional output of
+            ``three_way_attack.compute_three_way``; logged after the retain
+            block and stored under ``three_way``.
     """
     if attacks is None:
         attacks = ATTACKS
@@ -625,6 +691,13 @@ def log_online_summary(
         for line in format_retain_rows(retain_analysis):
             logger.info(line)
         summary["retain_leakage"] = retain_analysis
+
+    if three_way is not None:
+        from three_way_attack import format_three_way_rows
+
+        for line in format_three_way_rows(three_way):
+            logger.info(line)
+        summary["three_way"] = three_way
 
     with open(f"{report_dir}/urmia_online_summary.json", "w") as f:
         json.dump(summary, f, indent=4)
