@@ -1,0 +1,33 @@
+run:
+  random_seed: 42
+  log_dir: logs/vit_ffcv
+  time_log: True
+  num_experiments: 1
+
+train:
+  model_name: vit_base_patch16_224
+  device: cuda
+  batch_size: 8
+  optimizer: AdamW
+  learning_rate: 3e-4      # 不要加引号
+  weight_decay: 0.05       # 不要加引号
+  epochs: 1               # 为了快速测试，可以先改成 5
+  warmup_epochs: 0
+  use_amp: True
+  save_checkpoint: True
+  checkpoint_dir: checkpoints/vit_ffcv
+  label_smoothing: 0.1          # 标签平滑系数 (0表示不使用)
+  mixup_alpha: 0.0              # Mixup 的 alpha 参数 (>0启用)
+  cutmix_alpha: 0.0             # CutMix 的 alpha 参数 (优先于Mixup)
+  ema_decay: 0              # EMA 衰减率 (0表示不使用)
+  grad_clip_norm: 1.0           # 梯度裁剪范数
+  early_stop_patience: 10       # 早停耐心值 (0表示禁用)
+
+data:
+  dataset: cifar10
+  data_dir: data
+  image_size: 224
+  num_workers: 2
+  loader_type: pytorch     # 使用 PyTorch DataLoader
+  ffcv:
+    cache_dir: data/ffcv_cache
