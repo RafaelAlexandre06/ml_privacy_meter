@@ -428,10 +428,14 @@ def prepare_online_reference_models(models_dir, dataset, splits, configs, logger
             continue
         if three_way and store.has(role):
             # The pre-unlearn state cannot be recovered from the unlearned one,
-            # and a fresh base paired with an old unlearned pkl would not be the
-            # same model, so both are regenerated.
-            logger.warning(
-                "%s exists without %s; regenerating both", role, role_base
+            # and regenerating references here would leave the signal cache
+            # stale: it invalidates on shape and unlearn fingerprint only, so
+            # the old refs' signals would be paired with new base signals.
+            raise FileExistsError(
+                f"{role} exists without {role_base}: this log_dir predates "
+                "audit.three_way. Use a fresh log_dir, or delete "
+                "models/online_reference_*.pkl and signals/urmia_signals*.npy "
+                "to regenerate the references."
             )
 
         retain_idx = np.where(ref_retain[k])[0]

@@ -288,6 +288,71 @@ def positive_control_lines(control):
     return lines
 
 
+def retain_leakage_block(pager, summary):
+    """Retain-set leakage table, present in level-2 and level-3 summaries."""
+    block = summary.get("retain_leakage")
+    if not block:
+        return
+    pager.text("Retain-set leakage", dy=0.017, family="sans-serif",
+               fontsize=8.5, fontweight="bold")
+    pager.caption(
+        f"members = {block.get('retain_audit_size')}-point retain sample, "
+        f"{block.get('unseen_size')} unseen non-members. delta = "
+        "score(unlearned) - score(original) per retain point; frac_inc = "
+        "fraction whose delta is positive; ctrl_d = the same delta for "
+        "retrained vs original.")
+    rows = []
+    for name, entry in block.get("scorers", {}).items():
+        p = entry.get("paired", {})
+        agg = entry.get("aggregate") or {}
+        rows.append([name, p.get("frac_increased"), p.get("delta_mean"),
+                     p.get("delta_median"),
+                     p.get("delta_retrained_vs_original_mean"),
+                     agg.get("original", {}).get("auc"),
+                     agg.get("unlearned", {}).get("auc"),
+                     agg.get("original", {}).get("one_fpr"),
+                     agg.get("unlearned", {}).get("one_fpr")])
+    pager.block(table_lines(
+        ["scorer", "frac_inc", "d_mean", "d_med", "ctrl_d", "auc_orig",
+         "auc_unl", "tpr1_orig", "tpr1_unl"], rows, first_width=15, width=10))
+    pager.y -= 0.008
+
+
+def three_way_block(pager, summary):
+    """Three-way (trained / unlearned / never) table from a level-3 summary."""
+    block = summary.get("three_way")
+    if not block:
+        return
+    pager.text("Three-way test (trained / unlearned / never)", dy=0.017,
+               family="sans-serif", fontsize=8.5, fontweight="bold")
+    c = block.get("collateral", {})
+    pager.caption(
+        f"{block.get('num_ref_models')} references per point, fit from "
+        "references only. Cells are the fraction of each group assigned to "
+        "each world; member = trained or unlearned; advertised = below the "
+        f"never baseline by {block.get('n_sigma')} sigma. collateral (never "
+        "world shift from unlearning other points): "
+        f"mean {fmt(c.get('mean'), 0)}, forget {fmt(c.get('forget'), 0)}, "
+        f"unseen {fmt(c.get('unseen'), 0)}.")
+    rows = []
+    for role, res in block.get("targets", {}).items():
+        for group in ("forget", "unseen"):
+            g = res.get(group, {})
+            frac = g.get("frac", {})
+            rows.append([f"{role}/{group}", frac.get("trained"),
+                         frac.get("unlearned"), frac.get("never"),
+                         g.get("member_rate"), g.get("advertised")])
+    pager.block(table_lines(
+        ["target/group", "trained", "unlearned", "never", "member",
+         "advertised"], rows, first_width=18, width=11))
+    acc_rows = [[role, res.get("binary_balanced_acc")]
+                for role, res in block.get("targets", {}).items()]
+    pager.y -= 0.006
+    pager.block(table_lines(["binary balanced acc", "forget vs unseen"],
+                            acc_rows, first_width=22, width=18))
+    pager.y -= 0.008
+
+
 METRIC_COLUMNS = [
     ("auc", "AUC", 4),
     ("two_sided_auc", "2-sided", 4),
@@ -307,6 +372,8 @@ def section_level2(pager, run):
                     + [values.get(key) for key, _, _ in METRIC_COLUMNS]
                     + [values.get("test_acc"), values.get("forget_acc")])
     pager.block(table_lines(headers, rows, first_width=12, width=10))
+    pager.y -= 0.008
+    retain_leakage_block(pager, run["summary"])
 
 
 def scorer_tables(pager, roles, metric, label):
@@ -338,6 +405,8 @@ def section_level3(pager, run):
                           ("one_tenth_fpr", "TPR @ 0.1% FPR"),
                           ("one_fpr", "TPR @ 1% FPR")]:
         scorer_tables(pager, roles, metric, label)
+    retain_leakage_block(pager, run["summary"])
+    three_way_block(pager, run["summary"])
 
 
 def section_ola(pager, run):
