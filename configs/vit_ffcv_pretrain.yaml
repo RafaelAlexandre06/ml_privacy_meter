@@ -1,0 +1,26 @@
+run:
+  log_dir: experiments/exp_baseline_t4/logs
+train:
+  model_name: vit_base_patch16_224
+  device: cuda
+  batch_size: 128
+  optimizer: AdamW
+  learning_rate: 1e-4
+  weight_decay: 0.05
+  epochs: 120
+  warmup_epochs: 5
+  use_amp: True
+  save_checkpoint: True
+  checkpoint_dir: experiments/exp_baseline_t4/checkpoints
+  label_smoothing: 0.1
+  cutmix_alpha: 0.2
+  ema_decay: 0.999
+  grad_clip_norm: 1.0
+  early_stop_patience: 8
+  pretrained: True
+data:
+  dataset: cifar10
+  data_dir: data
+  image_size: 128
+  num_workers: 2
+  loader_type: pytorch
